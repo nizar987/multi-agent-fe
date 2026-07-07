@@ -1,0 +1,36 @@
+name: Build installers
+
+on:
+  push:
+    tags: ['v*']        # jalan otomatis kalau kamu push tag mis. v1.0.0
+  workflow_dispatch: {}   # + bisa di-trigger manual dari tab Actions
+
+permissions:
+  contents: write         # wajib, biar bisa upload ke GitHub Releases
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false     # kalau 1 OS gagal, OS lain tetap lanjut build
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'      # cache node_modules antar run, build lebih cepat
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Next.js
+        run: npm run build:next
+
+      - name: Build & publish installer
+        run: npx electron-builder --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

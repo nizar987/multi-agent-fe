@@ -1,0 +1,96 @@
+{
+  "name": "agent-platform-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent Platform — desktop app (Electron + Next.js)",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "next dev -p 3210",
+    "build": "next build && node scripts/copy-mcp.js && node scripts/copy-static.js",
+    "start": "next start -p 3210",
+    "electron": "electron .",
+    "electron:dev": "NODE_ENV=development electron .",
+    "rebuild:node": "npm rebuild better-sqlite3",
+    "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
+    "pack": "npm run rebuild:electron && npm run build && electron-builder --dir",
+    "dist": "npm run rebuild:electron && npm run build && electron-builder",
+    "dist:linux": "npm run rebuild:electron && npm run build && electron-builder --linux",
+    "dist:mac": "npm run rebuild:electron && npm run build && electron-builder --mac",
+    "dist:win": "npm run rebuild:electron && npm run build && electron-builder --win"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/server-filesystem": "^2025.1.14",
+    "@modelcontextprotocol/server-gitlab": "^2025.4.25",
+    "@types/node-cron": "^3.0.11",
+    "better-sqlite3": "^12.11.1",
+    "ioredis": "^5.11.1",
+    "mysql2": "^3.22.5",
+    "next": "^14.2.15",
+    "node-cron": "^4.6.0",
+    "pg": "^8.22.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "recharts": "^3.9.2",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.20.0",
+    "@types/react": "^18.3.3",
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.5.0"
+  },
+  "build": {
+    "appId": "co.nizar.agent-platform",
+    "productName": "Agent Platform",
+    "directories": {
+      "output": "release",
+      "buildResources": "build-resources"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "nizar987",
+      "repo": "multi-agent-fe",
+      "vPrefix": true
+    },
+    "asar": false,
+    "files": [
+      "electron/**/*",
+      ".next/standalone/**/*",
+      "!**/*.{md,map,ts,tsx}",
+      "!**/{.eslintrc,.editorconfig,.prettierrc,tsconfig.json}"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.js"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "maintainer": "lordasu"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "identity": null,
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
