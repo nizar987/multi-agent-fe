@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false     # kalau 1 OS gagal, OS lain tetap lanjut build
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, ubuntu-latest, windows-2022]
     runs-on: ${{ matrix.os }}
 
     steps:
