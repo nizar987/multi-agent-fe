@@ -15,9 +15,9 @@ export default function LandingPage() {
   }, []);
 
   const downloadLinks = {
-    mac: { label: "Download for macOS", icon: "🍎", url: "#" },
-    linux: { label: "Download for Linux", icon: "🐧", url: "#" },
-    windows: { label: "Download for Windows", icon: "🪟", url: "#" },
+    mac: { label: "Download for macOS", icon: "🍎", url: "https://github.com/nizar987/multi-agent-fe/releases/download/untagged-6309d82da15c44238070/Agent-Platform-0.1.0-arm64.dmg" },
+    linux: { label: "Download for Linux", icon: "🐧", url: "https://github.com/nizar987/multi-agent-fe/releases/download/untagged-6309d82da15c44238070/agent-platform-desktop_0.1.0_amd64.deb" },
+    windows: { label: "Download for Windows", icon: "🪟", url: "https://github.com/nizar987/multi-agent-fe/releases/download/untagged-6309d82da15c44238070/Agent-Platform-Setup-0.1.0.exe" },
   };
 
   const primaryDownload = detectedOS !== "unknown" ? downloadLinks[detectedOS] : null;
@@ -40,7 +40,7 @@ export default function LandingPage() {
         <nav style={{ display: "flex", gap: "24px", alignItems: "center" }}>
           <a href="#features" style={{ color: "var(--text-secondary)", textDecoration: "none" }}>Features</a>
           <a href="#architecture" style={{ color: "var(--text-secondary)", textDecoration: "none" }}>Architecture</a>
-          <a href="https://github.com" style={{ color: "var(--text-secondary)", textDecoration: "none" }}>GitHub</a>
+          {/* <a href="https://github.com" style={{ color: "var(--text-secondary)", textDecoration: "none" }}>GitHub</a> */}
           <a href="https://ko-fi.com/lordasu" target="_blank" rel="noopener noreferrer" style={{ color: "var(--text-secondary)", textDecoration: "none" }}>Donate</a>
         </nav>
       </header>
@@ -528,9 +528,9 @@ export default function LandingPage() {
             {/* Download Options */}
             <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "12px" }}>
               {([
-                { os: "mac" as OS, icon: "🍎", label: "macOS", sublabel: "Apple Silicon & Intel · .dmg", url: "#" },
-                { os: "windows" as OS, icon: "🪟", label: "Windows", sublabel: "64-bit · .exe installer", url: "#" },
-                { os: "linux" as OS, icon: "🐧", label: "Linux", sublabel: "x86_64 · .AppImage", url: "#" },
+                { os: "mac" as OS, icon: "🍎", label: "macOS", sublabel: "Apple Silicon & Intel · .dmg", url: "https://github.com/nizar987/multi-agent-fe/releases/download/untagged-6309d82da15c44238070/Agent-Platform-0.1.0-arm64.dmg" },
+                { os: "windows" as OS, icon: "🪟", label: "Windows", sublabel: "64-bit · .exe installer", url: "https://github.com/nizar987/multi-agent-fe/releases/download/untagged-6309d82da15c44238070/Agent-Platform-Setup-0.1.0.exe" },
+                { os: "linux" as OS, icon: "🐧", label: "Linux", sublabel: "x86_64 · .AppImage", url: "https://github.com/nizar987/multi-agent-fe/releases/download/untagged-6309d82da15c44238070/agent-platform-desktop_0.1.0_amd64.deb" },
               ]).map(({ os, icon, label, sublabel, url }) => {
                 const isDetected = detectedOS === os;
                 return (
