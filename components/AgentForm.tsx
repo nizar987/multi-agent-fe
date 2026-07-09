@@ -14,6 +14,7 @@ const TOOL_LABELS: Record<string, string> = {
   filesystem: "Filesystem",
   memory: "Shared memory",
   delegate: "Delegate to other agents",
+  vision: "Read images (via vision model)",
   shell: "Shell (run commands)",
   database: "Database (SQL query)",
   redis: "Redis",
@@ -34,6 +35,8 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("");
+  const [categories, setCategories] = useState<string[]>([]);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [modelOverride, setModelOverride] = useState("");
   const [tools, setTools] = useState<string[]>([]);
@@ -43,19 +46,31 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
   const [saving, setSaving] = useState(false);
   const [avatar, setAvatar] = useState("🤖");
   const [color, setColor] = useState("#c15f3c");
+  const [workingDir, setWorkingDir] = useState<string | null>(null);
+  const [pickingFolder, setPickingFolder] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/skills").then((r) => r.json()).then(setSkills);
     fetch("/api/tools/status").then((r) => r.json()).then((d) => setToolStatus(d.tools));
+    // Existing categories power the datalist so labels stay consistent.
+    fetch("/api/agents").then((r) => r.json()).then((list: any[]) => {
+      const cats = Array.from(
+        new Set(list.map((a) => (a.category ?? "").trim()).filter(Boolean))
+      ).sort();
+      setCategories(cats);
+    });
     if (agentId) {
       fetch(`/api/agents/${agentId}`).then((r) => r.json()).then((a) => {
         setName(a.name); setDescription(a.description ?? "");
+        setCategory(a.category ?? "");
         setSystemPrompt(a.system_prompt ?? "");
         setModelOverride(a.model_override ?? "");
         setTools(JSON.parse(a.tools || "[]"));
         setSkillIds(JSON.parse(a.skill_ids || "[]"));
         setAvatar(a.avatar ?? "🤖");
         setColor(a.color ?? "#c15f3c");
+        setWorkingDir(a.working_dir ?? null);
       });
     }
   }, [agentId]);
@@ -63,12 +78,39 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
   const toggle = (t: string) =>
     setTools((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
+  const pickFolder = async () => {
+    if (!agentId) return;
+    setPickingFolder(true);
+    setFolderError(null);
+    try {
+      const r = await fetch(`/api/agents/${agentId}/pick-folder`, { method: "POST" });
+      if (r.status === 501) {
+        const j = await r.json();
+        setFolderError(j.error);
+        return;
+      }
+      const j = await r.json();
+      if (!j.canceled) setWorkingDir(j.folder);
+    } catch {
+      setFolderError("Failed to open folder dialog.");
+    } finally {
+      setPickingFolder(false);
+    }
+  };
+
+  const clearFolder = async () => {
+    if (!agentId) return;
+    await fetch(`/api/agents/${agentId}/pick-folder`, { method: "DELETE" });
+    setWorkingDir(null);
+  };
+
   const save = async () => {
     setSaving(true);
     const body = {
-      name: name || "New agent", description, system_prompt: systemPrompt,
+      name: name || "New agent", description, category: category.trim(),
+      system_prompt: systemPrompt,
       model_override: modelOverride || null, tools, skill_ids: skillIds,
-      avatar, color,
+      avatar, color, working_dir: workingDir || null,
     };
     if (agentId) {
       await fetch(`/api/agents/${agentId}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -81,7 +123,7 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
   const mcpTools = ["github", "gitlab", "tavily", "tavily_mcp", "filesystem", "database", "redis", "monitoring"];
 
   return (
-    <div style={{ maxWidth: 640 }}>
+    <div className="form-wrap">
       <h1>{agentId ? "Edit agent" : "New agent"}</h1>
 
       <div className="field">
@@ -113,6 +155,19 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
           placeholder="used by other agents to decide when to delegate to this one" />
       </div>
       <div className="field">
+        <label>Category <span className="muted">(optional — group agents so the workspace can add a whole category at once)</span></label>
+        <input
+          className="input"
+          list="agent-categories"
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          placeholder="e.g. coding · research · devops"
+        />
+        <datalist id="agent-categories">
+          {categories.map((c) => <option key={c} value={c} />)}
+        </datalist>
+      </div>
+      <div className="field">
         <label>System prompt</label>
         <textarea className="input" rows={5} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
       </div>
@@ -135,14 +190,14 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
                 {TOOL_LABELS[t]} <span className="muted small">— {toolStatus[t]?.detail ?? "checking…"}</span>
               </label>
               {disabled && (
-                <Link href={t === "monitoring" ? "/monitoring" : "/settings"} className="small">
-                  {t === "monitoring" ? "Configure in Monitoring →" : "Configure in Settings →"}
+                <Link href={t === "monitoring" ? "/monitoring" : "/connections"} className="small">
+                  {t === "monitoring" ? "Configure in Monitoring →" : "Configure in Connections →"}
                 </Link>
               )}
             </div>
           );
         })}
-        {["memory", "delegate"].map((t) => (
+        {["memory", "delegate", "vision"].map((t) => (
           <div key={t} className="tool-status-row">
             <input type="checkbox" id={`tool-${t}`} checked={tools.includes(t)} onChange={() => toggle(t)} />
             <span className="dot dot-green" />
@@ -195,6 +250,57 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
             </label>
           </div>
         ))}
+      </div>
+
+      {/* ============ Working Directory ============ */}
+      <div className="field">
+        <label>Working Directory</label>
+        <div className="hint" style={{ marginBottom: 8 }}>
+          The folder this agent works in when running shell commands or accessing files.
+          Defaults to the first allowed folder in Settings if not set.
+          {!agentId && (
+            <span style={{ display: "block", marginTop: 4, color: "var(--warning)" }}>
+              Save the agent first, then set a working directory.
+            </span>
+          )}
+        </div>
+
+        {workingDir ? (
+          <div className="list-row">
+            <span>📁</span>
+            <div className="grow path-truncate" title={workingDir}>{workingDir}</div>
+            <button
+              className="btn"
+              onClick={pickFolder}
+              disabled={!agentId || pickingFolder}
+            >
+              {pickingFolder ? <><span className="spinner" /> Opening…</> : "Change…"}
+            </button>
+            <button
+              className="btn btn-danger-ghost"
+              onClick={clearFolder}
+              disabled={!agentId}
+              title="Remove working directory (reverts to global default)"
+            >
+              Remove
+            </button>
+          </div>
+        ) : (
+          <button
+            className="btn"
+            onClick={pickFolder}
+            disabled={!agentId || pickingFolder}
+            title={!agentId ? "Save the agent first" : undefined}
+          >
+            {pickingFolder
+              ? <><span className="spinner" /> Opening…</>
+              : "📂 Open folder…"}
+          </button>
+        )}
+
+        {folderError && (
+          <div className="error-text" style={{ marginTop: 6 }}>{folderError}</div>
+        )}
       </div>
 
       <div className="row">

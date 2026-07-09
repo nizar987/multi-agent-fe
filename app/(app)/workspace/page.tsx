@@ -3,11 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import AgentAvatar from "@/components/AgentAvatar";
 import ApprovalCard, { ApprovalItem } from "@/components/ApprovalCard";
+import AskUserCard, { AskItem } from "@/components/AskUserCard";
 import PreviewPanel from "@/components/PreviewPanel";
+import { detectTargets, type PreviewTarget } from "@/lib/preview-detect";
 import ModeSelect, { RunMode } from "@/components/ModeSelect";
 import PanelIcon from "@/components/PanelIcon";
 import AttachmentBar from "@/components/AttachmentBar";
-import { PickedAttachment, toWire } from "@/components/attachments-client";
+import { PickedAttachment, toWire, parseStoredMessage, stripAttachTag } from "@/components/attachments-client";
 import ManagerRun from "@/components/ManagerRun";
 import ConnectorModal from "@/components/ConnectorModal";
 import ModelSelect from "@/components/ModelSelect";
@@ -21,13 +23,15 @@ type AgentResp = {
   text: string;
   tools: { tool: string; done: boolean; ok?: boolean }[];
   approvals: ApprovalItem[];
+  asks: AskItem[];
   notices: string[];
   done: boolean;
   error?: string;
 };
-type Round = { user: string; responses: Record<number, AgentResp> };
+type RoundAtt = { name: string; kind: string; previewUrl?: string };
+type Round = { user: string; atts?: RoundAtt[]; responses: Record<number, AgentResp> };
 
-const emptyResp = (): AgentResp => ({ text: "", tools: [], approvals: [], notices: [], done: false });
+const emptyResp = (): AgentResp => ({ text: "", tools: [], approvals: [], asks: [], notices: [], done: false });
 
 export default function WorkspacePage() {
   const [agents, setAgents] = useState<any[]>([]);
@@ -39,19 +43,23 @@ export default function WorkspacePage() {
   const [busy, setBusy] = useState(false);
   const [needsKey, setNeedsKey] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [showPreview, setShowPreview] = useState(true);
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
   const [mode, setMode] = useState<RunMode>("approval");
   const [planReady, setPlanReady] = useState(false); // plan drafted → show the proceed button
   const [attachments, setAttachments] = useState<PickedAttachment[]>([]);
   const [wsMode, setWsMode] = useState<WsMode>("parallel");
   const [managerTaskIds, setManagerTaskIds] = useState<number[]>([]);
   const [connectorOpen, setConnectorOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const [model, setModel] = useState("");
   const [sessions, setSessions] = useState<WsSession[]>([]);
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [selReply, setSelReply] = useState<{ x: number; y: number; text: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,7 +146,9 @@ export default function WorkspacePage() {
           if (existingIdx >= 0) {
             openRoundForAgent[agentId] = existingIdx;
           } else {
-            rs.push({ user: m.content, responses: {} });
+            // Rebuild attachment chips/thumbnails from the stored message.
+            const { atts } = parseStoredMessage(m.content, m.meta);
+            rs.push({ user: m.content, atts: atts.length ? atts : undefined, responses: {} });
             openRoundForAgent[agentId] = rs.length - 1;
           }
         } else {
@@ -187,6 +197,34 @@ export default function WorkspacePage() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [rounds, working]);
 
+  // show a floating "Reply" button when text inside a response is highlighted
+  useEffect(() => {
+    const onMouseUp = (e: MouseEvent) => {
+      // ignore mouseup on the reply button itself
+      if ((e.target as Element)?.closest?.(".sel-reply-btn")) return;
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) { setSelReply(null); return; }
+      const text = sel.toString().trim();
+      if (!text) { setSelReply(null); return; }
+      const anchor = sel.anchorNode;
+      const el = anchor instanceof Element ? anchor : anchor?.parentElement;
+      if (!el?.closest(".ws-turn-body, .msg-body")) { setSelReply(null); return; }
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      setSelReply({ x: rect.left + rect.width / 2, y: rect.top, text });
+    };
+    document.addEventListener("mouseup", onMouseUp);
+    return () => document.removeEventListener("mouseup", onMouseUp);
+  }, []);
+
+  const replyToSelection = () => {
+    if (!selReply) return;
+    const quoted = selReply.text.split("\n").map((l) => `> ${l}`).join("\n");
+    setInput((prev) => (prev.trim() ? `${prev}\n${quoted}\n` : `${quoted}\n`));
+    setSelReply(null);
+    window.getSelection()?.removeAllRanges();
+    inputRef.current?.focus();
+  };
+
   // close the picker on outside click
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -223,13 +261,50 @@ export default function WorkspacePage() {
     });
   };
 
+  /** Add every agent of a category to the team in one click. */
+  const addCategory = (cat: string) => {
+    setActive((prev) => {
+      const ids = agents
+        .filter((a) => (a.category ?? "").trim() === cat && !prev.includes(a.id))
+        .map((a) => a.id);
+      if (ids.length === 0) return prev;
+      const next = [...prev, ...ids];
+      persistAgents(next, sessionId);
+      return next;
+    });
+    setPickerOpen(false);
+  };
+
   const agentById = (id: number) => agents.find((a) => a.id === id);
   const available = agents.filter((a) => !active.includes(a.id));
 
+  /** Available agents grouped by category (uncategorized sorts last). */
+  const availableByCategory = (): [string, any[]][] => {
+    const map = new Map<string, any[]>();
+    for (const a of available) {
+      const cat = (a.category ?? "").trim() || "Uncategorized";
+      (map.get(cat) ?? map.set(cat, []).get(cat)!).push(a);
+    }
+    return [...map.entries()].sort(([a], [b]) =>
+      a === "Uncategorized" ? 1 : b === "Uncategorized" ? -1 : a.localeCompare(b)
+    );
+  };
+
   // collect all agent response text for the preview
-  const previewTexts = rounds.flatMap((r) =>
-    Object.values(r.responses).map((resp) => resp.text).filter(Boolean)
-  );
+  // open preview on explicit link click
+  const openPreview = (href: string) => {
+    const targets = detectTargets(href);
+    if (targets.length > 0) {
+      setPreviewTarget(targets[0]);
+    } else if (href.startsWith("http://") || href.startsWith("https://")) {
+      try {
+        const host = new URL(href).hostname.replace(/^www\./, "");
+        setPreviewTarget({ kind: "web", url: href, label: host });
+      } catch { /* invalid */ }
+    } else {
+      setPreviewTarget({ kind: "file", path: href, label: href.split("/").pop() || href });
+    }
+  };
 
   const sendMessage = async (text: string, runMode: RunMode = mode, atts: PickedAttachment[] = [], sid?: number) => {
     if ((!text && atts.length === 0) || active.length === 0 || busy) return;
@@ -239,7 +314,8 @@ export default function WorkspacePage() {
     setWorking(new Set(ids));
 
     const roundUser = atts.length ? `${text}${text ? "\n" : ""}[lampiran: ${atts.map((a) => a.name).join(", ")}]` : text;
-    const round: Round = { user: roundUser, responses: {} };
+    const roundAtts: RoundAtt[] = atts.map((a) => ({ name: a.name, kind: a.kind, previewUrl: a.previewUrl }));
+    const round: Round = { user: roundUser, atts: roundAtts.length ? roundAtts : undefined, responses: {} };
     for (const id of ids) round.responses[id] = emptyResp();
     setRounds((p) => [...p, round]);
     const roundIdx = rounds.length;
@@ -281,6 +357,11 @@ export default function WorkspacePage() {
             ...r,
             approvals: r.approvals.map((s) => s.id === ev.id && s.state === "pending" ? { ...s, state: ev.approved ? "approved" : "rejected" } : s),
           }));
+          else if (ev.type === "ask_user") patch(id, (r) => ({ ...r, asks: [...r.asks, { id: ev.id, question: ev.question, options: ev.options ?? [], state: "pending" }] }));
+          else if (ev.type === "ask_resolved") patch(id, (r) => ({
+            ...r,
+            asks: r.asks.map((a) => a.id === ev.id && a.state === "pending" ? { ...a, state: "answered", answer: ev.answer } : a),
+          }));
           else if (ev.type === "tool_result") patch(id, (r) => {
             const tools = [...r.tools];
             for (let i = tools.length - 1; i >= 0; i--) {
@@ -290,7 +371,14 @@ export default function WorkspacePage() {
           });
           else if (ev.type === "system_notice") patch(id, (r) => ({ ...r, notices: [...r.notices, ev.text] }));
           else if (ev.type === "done") {
-            patch(id, (r) => ({ ...r, done: true }));
+            patch(id, (r) => ({
+              ...r,
+              done: true,
+              // Never end silently: surface empty answers as a notice.
+              notices: r.text.trim() || r.error
+                ? r.notices
+                : [...r.notices, "⚠ The model returned an empty answer — check the Logs page for details."],
+            }));
             setWorking((prev) => { const n = new Set(prev); n.delete(id); return n; });
           } else if (ev.type === "error") {
             patch(id, (r) => ({ ...r, done: true, error: ev.message }));
@@ -308,14 +396,19 @@ export default function WorkspacePage() {
   };
 
   // Manager mode: the picked agents become the manager's team for one task.
-  const startManagerTask = async (text: string) => {
+  const startManagerTask = async (text: string, atts: PickedAttachment[] = []) => {
     if (!text || active.length === 0 || busy) return;
     setBusy(true);
     try {
       const res = await fetch("/api/manager/tasks", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ original_request: text, agent_ids: active, model: model || undefined }),
+        body: JSON.stringify({
+          original_request: text,
+          agent_ids: active,
+          model: model || undefined,
+          attachments: atts.map(toWire),
+        }),
       });
       if (res.status === 428) { setNeedsKey(true); return; }
       const data = await res.json();
@@ -325,13 +418,37 @@ export default function WorkspacePage() {
     }
   };
 
+  const retryRound = (roundIdx: number) => {
+    const round = rounds[roundIdx];
+    if (!round || busy) return;
+    // Remove this round and all subsequent rounds, then re-send
+    setRounds((prev) => prev.slice(0, roundIdx));
+    // Extract original text (strip attachment annotation if present)
+    const originalText = round.user.replace(/\n?\[lampiran:.*\]$/, "").trim();
+    sendMessage(originalText, mode, [], sessionId ?? undefined);
+  };
+
+  const pickFiles = async (files: FileList | null) => {
+    if (!files) return;
+    const { readFileToAttachment } = await import("@/components/attachments-client");
+    const added: PickedAttachment[] = [];
+    for (const f of Array.from(files)) {
+      const res = await readFileToAttachment(f);
+      if ("error" in res) alert(res.error);
+      else added.push(res);
+    }
+    if (added.length) setAttachments((prev) => [...prev, ...added]);
+  };
+
   const send = () => {
     const text = input.trim();
     if (!text && attachments.length === 0) return;
     if (wsMode === "manager") {
       if (!text) return;
+      const atts = attachments;
       setInput("");
-      startManagerTask(text);
+      setAttachments([]);
+      startManagerTask(text, atts);
       return;
     }
     const atts = attachments;
@@ -357,11 +474,20 @@ export default function WorkspacePage() {
     sendMessage("Proceed: execute the plan you drafted above, step by step.", "approval");
   };
 
-  const decideApproval = async (approvalId: string, approved: boolean) => {
+  const answerAsk = async (id: string, answer: string) => {
+    await fetch("/api/ask/answer", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, answer }),
+    });
+    // card state is updated by the ask_resolved event from the server
+  };
+
+  const decideApproval = async (approvalId: string, decision: "always" | "once" | "deny") => {
     await fetch("/api/shell/approve", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: approvalId, approved }),
+      body: JSON.stringify({ id: approvalId, decision }),
     });
   };
 
@@ -384,7 +510,7 @@ export default function WorkspacePage() {
           <div style={{ fontSize: 28, marginBottom: 12 }}>◆</div>
           <h2>Connect an AI model first</h2>
           <p className="muted">The workspace needs an AI API key to run agents.</p>
-          <Link href="/settings#ai" className="btn btn-primary">Open Settings → AI Provider</Link>
+          <Link href="/connections" className="btn btn-primary">Open Connections → AI Provider</Link>
         </div>
       </div>
     );
@@ -430,29 +556,31 @@ export default function WorkspacePage() {
 
       {/* kolom chat */}
       <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
-      <div className="chat-header" style={{ flexWrap: "wrap", gap: 10 }}>
-        <strong>Workspace</strong>
-        <div className="ws-mode-toggle">
-          <button className={wsMode === "parallel" ? "active" : ""} onClick={() => setWsMode("parallel")}>Parallel</button>
-          <button className={wsMode === "manager" ? "active" : ""} onClick={() => setWsMode("manager")}>Manager</button>
+      <div className="chat-header">
+        <div className="chat-header-row" style={{ flexWrap: "wrap", gap: 10 }}>
+          <strong>Workspace</strong>
+          <div className="ws-mode-toggle">
+            <button className={wsMode === "parallel" ? "active" : ""} onClick={() => setWsMode("parallel")}>Parallel</button>
+            <button className={wsMode === "manager" ? "active" : ""} onClick={() => setWsMode("manager")}>Manager</button>
+          </div>
+          <span className="muted small">
+            {wsMode === "manager"
+              ? "the manager plans, delegates to your picked agents, reviews & reports"
+              : "add the agents that should work — they run in parallel"}
+          </span>
+          <span style={{ flex: 1 }} />
+          <button
+            className={`btn btn-icon${previewTarget ? " active" : ""}`}
+            onClick={() => setPreviewTarget(null)}
+            title={previewTarget ? "Close preview panel" : "No preview open"}
+            disabled={!previewTarget}
+          ><PanelIcon /></button>
         </div>
-        <span className="muted small">
-          {wsMode === "manager"
-            ? "the manager plans, delegates to your picked agents, reviews & reports"
-            : "add the agents that should work — they run in parallel"}
-        </span>
-        <span style={{ flex: 1 }} />
-        <button className="btn" onClick={() => setConnectorOpen(true)} title="Add or switch connections">+ Connector</button>
-        {rounds.length > 0 && <button className="btn" onClick={clearWs}>Clear</button>}
-        <button
-          className={`btn btn-icon${showPreview ? " active" : ""}`}
-          onClick={() => setShowPreview((v) => !v)}
-          title={showPreview ? "Hide preview panel" : "Show preview panel"}
-        ><PanelIcon /></button>
       </div>
 
       {/* bar agent aktif + tombol Add */}
       <div className="ws-agentbar">
+      <div className="ws-agentbar-top">
         <div className="ws-agent-chips">
           {active.map((id) => {
             const a = agentById(id);
@@ -480,14 +608,28 @@ export default function WorkspacePage() {
             {pickerOpen && (
               <div className="ws-picker-menu">
                 {available.length === 0 && <div className="ws-picker-empty">No other agents.</div>}
-                {available.map((a) => (
-                  <button key={a.id} className="ws-picker-item" onClick={() => addAgent(a.id)}>
-                    <AgentAvatar avatar={a.avatar} color={a.color} size={22} />
-                    <span className="grow">
-                      <div style={{ fontWeight: 500 }}>{a.name}</div>
-                      {a.description && <div className="muted small" style={{ marginTop: 1 }}>{a.description}</div>}
-                    </span>
-                  </button>
+                {availableByCategory().map(([cat, list]) => (
+                  <div key={cat} className="ws-picker-group">
+                    <div className="ws-picker-group-head">
+                      <span className="ws-picker-group-name">{cat}</span>
+                      {cat !== "Uncategorized" && (
+                        <button
+                          className="ws-picker-addall"
+                          onClick={() => addCategory(cat)}
+                          title={`Add all ${list.length} agent${list.length > 1 ? "s" : ""} in "${cat}"`}
+                        >+ Add all ({list.length})</button>
+                      )}
+                    </div>
+                    {list.map((a) => (
+                      <button key={a.id} className="ws-picker-item" onClick={() => addAgent(a.id)}>
+                        <AgentAvatar avatar={a.avatar} color={a.color} size={22} />
+                        <span className="grow">
+                          <div style={{ fontWeight: 500 }}>{a.name}</div>
+                          {a.description && <div className="muted small" style={{ marginTop: 1 }}>{a.description}</div>}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 ))}
               </div>
             )}
@@ -497,9 +639,14 @@ export default function WorkspacePage() {
             <span className="muted small">No agents yet — <Link href="/agents/new">create one first</Link>.</span>
           )}
         </div>
+        </div>
       </div>
 
-      <div className="chat-scroll" ref={scrollRef}>
+      <div
+        className={`chat-scroll${(wsMode === "manager" ? managerTaskIds.length === 0 : rounds.length === 0) ? " chat-scroll--empty" : ""}`}
+        ref={scrollRef}
+        onScroll={() => setSelReply(null)}
+      >
         {/* ---------- Manager mode ---------- */}
         {wsMode === "manager" && (
           <>
@@ -542,7 +689,23 @@ export default function WorkspacePage() {
           <div key={ri} className="ws-round">
             <div className="msg user">
               <div className="msg-role">You</div>
-              <div className="msg-body">{round.user}</div>
+              <div className="msg-body">{round.atts?.length ? stripAttachTag(round.user) : round.user}</div>
+              {round.atts && round.atts.length > 0 && (
+                <div className="msg-attachments">
+                  {round.atts.map((a, k) => a.previewUrl
+                    ? <img key={k} src={a.previewUrl} alt={a.name} title={a.name} />
+                    : <span key={k} className="attach-chip"><span>{a.kind === "document" ? "📄" : "📝"}</span><span className="attach-name">{a.name}</span></span>)}
+                </div>
+              )}
+              <div className="msg-actions">
+                <button
+                  className="msg-retry-btn"
+                  onClick={() => retryRound(ri)}
+                  disabled={busy}
+                  title="Retry this message"
+                  aria-label="Retry"
+                >↺ Retry</button>
+              </div>
             </div>
             <div className="ws-thread">
               {Object.entries(round.responses).map(([idStr, resp]) => {
@@ -566,12 +729,28 @@ export default function WorkspacePage() {
                           <ApprovalCard item={s} onDecide={decideApproval} />
                         </div>
                       ))}
+                      {resp.asks.map((a) => (
+                        <div key={a.id} style={{ margin: "6px 0" }}>
+                          <AskUserCard item={a} onAnswer={answerAsk} />
+                        </div>
+                      ))}
                       <ToolProgress tools={resp.tools} />
                       {resp.error
                         ? <MessageBody text={resp.error} isError />
                         : resp.text
-                          ? <MessageBody text={resp.text} />
+                          ? <MessageBody text={resp.text} onOpenPreview={openPreview} />
                           : isWorking && <ThinkingIndicator tool={resp.tools.find(t => !t.done)?.tool} />}
+                      {resp.done && (
+                        <div className="msg-actions">
+                          <button
+                            className="msg-retry-btn"
+                            onClick={() => retryRound(ri)}
+                            disabled={busy}
+                            title="Retry — resend this message"
+                            aria-label="Retry"
+                          >↺ Retry</button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -583,10 +762,8 @@ export default function WorkspacePage() {
 
       <div className="chat-input-bar">
         <div className="chat-input-inner">
-          {wsMode === "parallel" && (
-            <AttachmentBar attachments={attachments} onChange={setAttachments} disabled={busy || active.length === 0} />
-          )}
           <textarea
+            ref={inputRef}
             className="input"
             rows={2}
             placeholder={
@@ -610,6 +787,7 @@ export default function WorkspacePage() {
           </button>
         </div>
         <div className="chat-input-footer">
+          <AttachmentBar attachments={attachments} onChange={setAttachments} disabled={busy || active.length === 0} />
           {wsMode === "parallel" ? (
             <ModeSelect value={mode} onChange={setMode} showProceed={planReady && !busy} onProceed={proceedPlan} />
           ) : (
@@ -620,14 +798,61 @@ export default function WorkspacePage() {
             onChange={setModel}
             defaultLabel={wsMode === "manager" ? "Agents' default" : "Agent default"}
             title={wsMode === "manager" ? "Model for the manager & its agents" : "Model for this run"}
-            style={{ width: 180 }}
+            style={{ width: 180, flex: "none", marginLeft: "auto" }}
           />
+        </div>
+        <div className="chat-input-actions">
+          <div className="chat-input-action-left">
+            <button className="btn btn-sm btn-connector" onClick={() => setConnectorOpen(true)} title="Add or switch connections">🔗 Connector</button>
+            <button
+              className="btn btn-sm btn-upload"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || active.length === 0}
+              title="Upload file (PDF, teks, kode)"
+            >📎 File</button>
+            <button
+              className="btn btn-sm btn-upload"
+              onClick={() => photoInputRef.current?.click()}
+              disabled={busy || active.length === 0}
+              title="Upload foto / gambar"
+            >🖼 Foto</button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="application/pdf,text/*,.md,.csv,.json,.yaml,.yml,.js,.ts,.tsx,.py,.go,.rs,.java,.sql,.sh,.html,.css"
+              style={{ display: "none" }}
+              onChange={(e) => pickFiles(e.target.files)}
+            />
+            <input
+              ref={photoInputRef}
+              type="file"
+              multiple
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              style={{ display: "none" }}
+              onChange={(e) => pickFiles(e.target.files)}
+            />
+          </div>
+          <div className="chat-input-action-right">
+            {rounds.length > 0 && (
+              <button className="btn btn-sm btn-ghost-danger" onClick={clearWs} title="Clear workspace history">🧹 Clear</button>
+            )}
+          </div>
         </div>
       </div>
       </div>
 
+      {/* floating reply-to-selection button */}
+      {selReply && (
+        <button
+          className="sel-reply-btn"
+          style={{ left: selReply.x, top: selReply.y }}
+          onMouseDown={(e) => { e.preventDefault(); replyToSelection(); }}
+        >↩ Reply</button>
+      )}
+
       {/* panel preview */}
-      {showPreview && <PreviewPanel texts={previewTexts} />}
+      <PreviewPanel target={previewTarget} onClose={() => setPreviewTarget(null)} />
 
       <ConnectorModal open={connectorOpen} onClose={() => setConnectorOpen(false)} />
     </div>

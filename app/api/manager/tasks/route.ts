@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { tasksRepo } from "@/lib/manager-db";
 import { startTask } from "@/lib/manager";
 import { hasSecret } from "@/lib/config";
+import type { Attachment } from "@/lib/attachments";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,9 @@ export async function POST(req: NextRequest) {
     ? body.agent_ids.map((n: unknown) => Number(n)).filter((n: number) => Number.isFinite(n))
     : [];
   const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : null;
-  const id = startTask(request, body?.title, agentIds, model);
+  const attachments: Attachment[] = Array.isArray(body?.attachments)
+    ? body.attachments.filter((a: any) => a && typeof a.name === "string" && typeof a.data === "string")
+    : [];
+  const id = startTask(request, body?.title, agentIds, model, attachments);
   return NextResponse.json({ id });
 }

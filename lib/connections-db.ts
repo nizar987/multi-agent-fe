@@ -9,6 +9,16 @@
  * a single active value and needs no changes.
  */
 import { getDb } from "./db";
+
+/** Normalize a pasted secret: trim, strip surrounding quotes and a "Bearer " prefix. */
+export function cleanSecret(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+}
+
 import {
   getConfig,
   updateConfig,
@@ -24,6 +34,7 @@ import {
 } from "./config";
 
 export type ConnKind =
+  | "ai"
   | "github"
   | "gitlab"
   | "database"
@@ -33,6 +44,7 @@ export type ConnKind =
   | "loki"
   | "tavily";
 export const CONN_KINDS: ConnKind[] = [
+  "ai",
   "github",
   "gitlab",
   "database",
@@ -118,7 +130,7 @@ export function createConnection(input: {
     .prepare("INSERT INTO connections(kind,name,config,is_active) VALUES(?,?,?,0)")
     .run(input.kind, input.name.trim() || input.kind, JSON.stringify(input.config ?? {}));
   const id = Number(r.lastInsertRowid);
-  if (input.secret) setConnectionSecret(id, input.secret);
+  if (input.secret?.trim()) setConnectionSecret(id, cleanSecret(input.secret));
 
   // First connection of its kind becomes active automatically.
   const activeExists = getDb()
@@ -140,7 +152,7 @@ export function updateConnection(
   if (patch.config !== undefined) {
     getDb().prepare("UPDATE connections SET config=? WHERE id=?").run(JSON.stringify(patch.config), id);
   }
-  if (patch.secret) setConnectionSecret(id, patch.secret);
+  if (patch.secret?.trim()) setConnectionSecret(id, cleanSecret(patch.secret));
   // If this connection is the active one, re-sync the legacy slot.
   const fresh = row(id);
   if (fresh?.is_active) {
@@ -194,7 +206,18 @@ export function applyActiveToLegacy(c: Connection): void {
   }
   const secret = getConnectionSecret(c.id);
 
-  if (c.kind === "github") {
+  if (c.kind === "ai") {
+    updateConfig({
+      ai: {
+        baseUrl: String(cfg.baseUrl || "https://api.anthropic.com"),
+        model: String(cfg.model || ""),
+        provider: (["anthropic", "openai", "gemini"].includes(cfg.provider) ? cfg.provider : "auto"),
+        visionModel: getConfig().ai.visionModel ?? "", // not per-connection — keep as is
+      },
+    });
+    if (secret) setSecret("aiApiKey", secret);
+    else deleteSecret("aiApiKey");
+  } else if (c.kind === "github") {
     if (secret) setSecret("githubToken", secret);
     else deleteSecret("githubToken");
   } else if (c.kind === "gitlab") {
@@ -232,7 +255,8 @@ export function applyActiveToLegacy(c: Connection): void {
 
 /** When the last connection of a kind is removed, disable it in the legacy slot. */
 function clearLegacy(kind: ConnKind): void {
-  if (kind === "github") deleteSecret("githubToken");
+  if (kind === "ai") deleteSecret("aiApiKey");
+  else if (kind === "github") deleteSecret("githubToken");
   else if (kind === "gitlab") deleteSecret("gitlabToken");
   else if (kind === "database") deleteSecret("dbPassword");
   else if (kind === "redis") deleteSecret("redisPassword");
@@ -250,7 +274,6 @@ function ensureMigrated(): void {
 
   const d = getDb();
   const count = (d.prepare("SELECT COUNT(*) c FROM connections").get() as { c: number }).c;
-  if (count > 0) return;
 
   const cfg = getConfig();
   const insert = (kind: ConnKind, name: string, config: Record<string, unknown>, secret: string | null) => {
@@ -260,6 +283,42 @@ function ensureMigrated(): void {
     );
     if (secret) setConnectionSecret(id, secret);
   };
+
+  // The AI kind shipped later than the others — seed it from the legacy slot
+  // even on installs that already have connections of other kinds.
+  const aiCount = (d.prepare("SELECT COUNT(*) c FROM connections WHERE kind='ai'").get() as { c: number }).c;
+  if (aiCount === 0 && hasSecret("aiApiKey")) {
+    insert(
+      "ai",
+      cfg.ai.model || "AI Provider",
+      { baseUrl: cfg.ai.baseUrl, model: cfg.ai.model, provider: cfg.ai.provider ?? "auto" },
+      getSecret("aiApiKey")
+    );
+  }
+
+  // NVIDIA NIM seed from .env: NVIDIA_API_KEY creates a (non-hijacking) AI
+  // connection once, and becomes the default vision model for read_image.
+  const nvKey = process.env.NVIDIA_API_KEY?.trim();
+  if (nvKey) {
+    const NV_MODEL = "mistralai/ministral-14b-instruct-2512";
+    const nvExists = d
+      .prepare("SELECT 1 FROM connections WHERE kind='ai' AND config LIKE '%integrate.api.nvidia.com%' LIMIT 1")
+      .get();
+    if (!nvExists) {
+      const r = d
+        .prepare("INSERT INTO connections(kind,name,config,is_active) VALUES('ai','NVIDIA NIM',?,0)")
+        .run(JSON.stringify({ baseUrl: "https://integrate.api.nvidia.com", model: NV_MODEL, provider: "openai" }));
+      setConnectionSecret(Number(r.lastInsertRowid), nvKey);
+      // Only becomes active when no other AI connection is active (never hijacks).
+      const activeAi = d.prepare("SELECT 1 FROM connections WHERE kind='ai' AND is_active=1 LIMIT 1").get();
+      if (!activeAi) setActive("ai", Number(r.lastInsertRowid));
+    }
+    if (!getConfig().ai.visionModel) {
+      updateConfig({ ai: { ...getConfig().ai, visionModel: NV_MODEL } });
+    }
+  }
+
+  if (count > 0) return;
 
   if (hasSecret("githubToken")) {
     insert("github", "GitHub", {}, getSecret("githubToken"));

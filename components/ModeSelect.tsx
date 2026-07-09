@@ -31,9 +31,9 @@ export default function ModeSelect({ value, onChange, showProceed, onProceed }: 
         <option value="plan">📝 Plan</option>
       </select>
       {value === "act" ? (
-        <span className="mode-warning">⚠ {HINTS.act}</span>
+        <span className="mode-warning" title={HINTS.act}>⚠ {HINTS.act}</span>
       ) : (
-        <span>{HINTS[value]}</span>
+        <span title={HINTS[value]}>{HINTS[value]}</span>
       )}
       {showProceed && onProceed && (
         <button

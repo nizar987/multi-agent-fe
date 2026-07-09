@@ -37,13 +37,13 @@ export default function AgentsPage() {
 
       <div className="card-grid">
         {agents?.map((a) => (
-          <div key={a.id} className="card clickable" onClick={() => (window.location.href = `/chat/${a.id}`)}>
+          <div key={a.id} className="card">
             <div className="row" style={{ justifyContent: "space-between" }}>
-              <span className="row">
+              <Link href={`/chat/${a.id}`} className="row" style={{ gap: 8, textDecoration: "none", color: "inherit", flex: 1, minWidth: 0 }}>
                 <AgentAvatar avatar={a.avatar} color={a.color} size={30} />
-                <h3 style={{ margin: 0 }}>{a.name}</h3>
-              </span>
-              <span className="row" onClick={(e) => e.stopPropagation()}>
+                <h3 style={{ margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</h3>
+              </Link>
+              <span className="row">
                 <Link href={`/agents/${a.id}`} className="btn" style={{ padding: "3px 8px", fontSize: 12 }}>Edit</Link>
                 <button className="btn btn-danger-ghost" style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => del(a.id, a.name)}>Delete</button>
               </span>

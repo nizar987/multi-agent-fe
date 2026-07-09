@@ -14,8 +14,16 @@ import { getDataDir, getBridge } from "./paths";
 
 export type DatabaseType = "postgres" | "mysql";
 
+export type AiProviderSetting = "auto" | "anthropic" | "openai" | "gemini";
+
 export type AppConfig = {
-  ai: { baseUrl: string; model: string };
+  ai: {
+    baseUrl: string;
+    model: string;
+    provider: AiProviderSetting;
+    /** Model used by the built-in read_image tool ("" = the active default model). */
+    visionModel: string;
+  };
   gitlab: { apiUrl: string };
   database: {
     type: DatabaseType;
@@ -35,7 +43,7 @@ export type AppConfig = {
 export type SecretName = "aiApiKey" | "githubToken" | "gitlabToken" | "dbPassword" | "redisPassword" | "tavilyApiKey";
 
 const DEFAULTS: AppConfig = {
-  ai: { baseUrl: "https://api.anthropic.com", model: "claude-sonnet-5" },
+  ai: { baseUrl: "https://api.anthropic.com", model: "claude-sonnet-5", provider: "auto", visionModel: "" },
   gitlab: { apiUrl: "https://gitlab.com/api/v4" },
   database: { type: "postgres", host: "localhost", port: 5432, user: "postgres", database: "postgres", ssl: false },
   redis: { host: "localhost", port: 6379, username: "", db: 0, tls: false },

@@ -1,25 +1,15 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import SecretField from "@/components/SecretField";
-import TestConnection from "@/components/TestConnection";
-import ConnectionsManager from "@/components/ConnectionsManager";
-import CronManager from "@/components/CronManager";
-
-const MODEL_PRESETS = ["claude-sonnet-5", "claude-opus-4.8", "claude-haiku-4.5"];
+import Link from "next/link";
 
 export default function SettingsPage() {
   const [data, setData] = useState<any>(null);
-  const [aiBaseUrl, setAiBaseUrl] = useState("");
-  const [aiModel, setAiModel] = useState("");
-  const [aiFail, setAiFail] = useState(false);
   const [backupRunning, setBackupRunning] = useState(false);
   const [backupResult, setBackupResult] = useState<any>(null);
 
   const load = useCallback(async () => {
     const d = await fetch("/api/settings").then((r) => r.json());
     setData(d);
-    setAiBaseUrl(d.config.ai.baseUrl);
-    setAiModel(d.config.ai.model);
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -71,89 +61,17 @@ export default function SettingsPage() {
     }
   };
 
-  const loadLogs = async () => {
-    // removed — logs now live on /logs page
-  };
-
   if (!data) return <div className="skeleton" style={{ width: 300, height: 20 }} />;
 
   return (
     <div>
       <h1>Settings</h1>
 
-      {/* ============ AI Provider ============ */}
-      <section className="settings-section" id="ai">
-        <h2>AI Provider</h2>
-        <div className="field">
-          <label>Base URL</label>
-          <input
-            className={`input mono${aiFail ? " field-error" : ""}`}
-            value={aiBaseUrl}
-            onChange={(e) => setAiBaseUrl(e.target.value)}
-            onBlur={() => saveConfig({ ai: { baseUrl: aiBaseUrl, model: aiModel } })}
-          />
-          <div className="hint">Anthropic directly, or a compatible gateway (e.g. Genfity).</div>
-        </div>
-        <SecretField
-          label="API Key"
-          name="aiApiKey"
-          isSet={data.secrets.aiApiKey.set}
-          tail={data.secrets.aiApiKey.tail}
-          backend={data.secretBackend}
-          onChanged={load}
-          placeholder="sk-ant-…"
-        />
-        <div className="field">
-          <label>Default model</label>
-          <div className="row">
-            <select className="input" style={{ width: 240 }} value={MODEL_PRESETS.includes(aiModel) ? aiModel : "__custom"}
-              onChange={(e) => {
-                if (e.target.value !== "__custom") {
-                  setAiModel(e.target.value);
-                  saveConfig({ ai: { baseUrl: aiBaseUrl, model: e.target.value } });
-                }
-              }}>
-              {MODEL_PRESETS.map((m) => <option key={m} value={m}>{m}</option>)}
-              <option value="__custom">custom…</option>
-            </select>
-            <input className="input mono" style={{ flex: 1 }} value={aiModel}
-              onChange={(e) => setAiModel(e.target.value)}
-              onBlur={() => saveConfig({ ai: { baseUrl: aiBaseUrl, model: aiModel } })}
-              placeholder="custom model name via gateway" />
-          </div>
-          <div className="hint">Applies to the next chat immediately — no restart needed.</div>
-        </div>
-        <TestConnection payload={{ service: "ai", baseUrl: aiBaseUrl, model: aiModel }} onResult={(ok) => setAiFail(!ok)} />
-      </section>
-
-      {/* ============ Web Search (Tavily) ============ */}
-      <section className="settings-section" id="tavily">
-        <h2>Web Search (Tavily)</h2>
-        <div className="hint mb-2">
-          Give agents with the <strong>Tavily</strong> tool live web access: search, extract page
-          content, crawl and map sites. Get a free API key at{" "}
-          <a href="https://app.tavily.com" target="_blank" rel="noreferrer">app.tavily.com</a> (1,000 credits/month).
-        </div>
-        <SecretField
-          label="API Key"
-          name="tavilyApiKey"
-          isSet={data.secrets.tavilyApiKey?.set}
-          tail={data.secrets.tavilyApiKey?.tail}
-          backend={data.secretBackend}
-          onChanged={load}
-          placeholder="tvly-…"
-        />
-      </section>
-
-      {/* ============ Connections (multiple per type) ============ */}
-      <section className="settings-section" id="connections">
-        <h2>Connections</h2>
-        <div className="hint mb-2">
-          Add as many GitHub, GitLab, database and Redis connections as you like — pick which one is
-          <strong> active</strong> for each type. Agents always use the active connection.
-        </div>
-        <ConnectionsManager onChanged={load} />
-      </section>
+      <p className="muted small">
+        Looking for AI providers & connectors? They moved to <Link href="/connections">Connections</Link>.
+        Recurring agent tasks are under <Link href="/schedules">Schedules</Link>, and always-allowed
+        actions under <Link href="/permissions">Permissions</Link>.
+      </p>
 
       {/* ============ Filesystem ============ */}
       <section className="settings-section" id="filesystem">
@@ -212,12 +130,6 @@ export default function SettingsPage() {
             </span>
           )}
         </div>
-      </section>
-
-      {/* ============ Cron Jobs ============ */}
-      <section className="settings-section" id="cron">
-        <h2>Scheduled Tasks (Cron)</h2>
-        <CronManager />
       </section>
 
       {/* ============ Appearance & more ============ */}

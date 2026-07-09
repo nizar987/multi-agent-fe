@@ -13,6 +13,7 @@ const NAV = [
   { href: "/memory", label: "Memory", icon: "▤" },
   { href: "/logs", label: "Logs", icon: "📋" },
   { href: "/monitoring", label: "Monitoring", icon: "📈" },
+  { href: "/tools", label: "Tools", icon: "🛠" },
 ];
 
 export default function Sidebar() {
@@ -49,7 +50,7 @@ export default function Sidebar() {
     aiStatus === "red" ? "AI has issues" : "AI not configured";
 
   return (
-    <nav className={`sidebar${isMac ? " mac-pad" : ""}`}>
+    <nav aria-label="Main navigation" className={`sidebar${isMac ? " mac-pad" : ""}`}>
       <div className="sidebar-brand">
         <span className="brand-mark">◆</span> Agent Platform
       </div>
@@ -67,6 +68,15 @@ export default function Sidebar() {
       ))}
       <div className="sidebar-spacer" />
       <div className="sidebar-divider" />
+      <Link href="/connections" className={`sidebar-item${pathname.startsWith("/connections") ? " active" : ""}`}>
+        <span>🔗</span> Connections
+      </Link>
+      <Link href="/schedules" className={`sidebar-item${pathname.startsWith("/schedules") ? " active" : ""}`}>
+        <span>⏰</span> Schedules
+      </Link>
+      <Link href="/permissions" className={`sidebar-item${pathname.startsWith("/permissions") ? " active" : ""}`}>
+        <span>🛡</span> Permissions
+      </Link>
       <a
         href="https://ko-fi.com/lordasu"
         target="_blank"
@@ -78,9 +88,6 @@ export default function Sidebar() {
       </a>
       <Link href="/settings" className={`sidebar-item${pathname.startsWith("/settings") ? " active" : ""}`}>
         <span>⚙</span> Settings
-      </Link>
-      <Link href="/tools" className={`sidebar-item${pathname.startsWith("/tools") ? " active" : ""}`}>
-        <span>🛠</span> Tools
       </Link>
       <div className="sidebar-status" title={statusText}>
         <span className={`dot dot-${aiStatus === "green" ? "green" : aiStatus === "red" ? "red" : "gray"}`} />

@@ -12,6 +12,8 @@ import { runAgent, RunEvent, RunMode } from "@/lib/agent-runtime";
 import { hasSecret } from "@/lib/config";
 import type { AiMessage } from "@/lib/ai";
 import { Attachment, buildUserContent, attachmentSummary } from "@/lib/attachments";
+import { describeImagesWithVision } from "@/lib/tools-vision";
+import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
@@ -80,7 +82,12 @@ export async function POST(req: NextRequest) {
   }
 
   const displayContent = attachmentSummary(message, atts);
-  const userContent = buildUserContent(message, atts);
+  if (atts.length > 0) {
+    logger.info(`Workspace attachments received: ${atts.map((a) => `${a.name} (${a.kind}/${a.mediaType})`).join(", ")}`);
+  }
+  // One vision pass shared by ALL agents: photos are described by the vision
+  // model once, and the text is appended to the content every agent receives.
+  const userContent = await describeImagesWithVision(buildUserContent(message, atts), message);
   const meta = Array.isArray(userContent) ? JSON.stringify({ contentBlocks: userContent }) : null;
 
   const db = getDb();
@@ -101,7 +108,7 @@ export async function POST(req: NextRequest) {
           .map(rowToAiMessage);
 
         try {
-          const finalText = await runAgent(agentId, history, (e) => send(agentId, e), 0, mode, modelOverride ? { modelOverride } : {});
+          const finalText = await runAgent(agentId, history, (e) => send(agentId, e), 0, mode, { interactive: true, ...(modelOverride ? { modelOverride } : {}) });
           db.prepare("INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)")
             .run(convId, "assistant", finalText || "(no answer)");
           send(agentId, { type: "done", finalText });
