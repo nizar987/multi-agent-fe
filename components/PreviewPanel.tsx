@@ -1,12 +1,14 @@
 "use client";
 import { useEffect, useState } from "react";
-import { detectTargets, type PreviewTarget } from "@/lib/preview-detect";
+import { type PreviewTarget } from "@/lib/preview-detect";
 
 interface PreviewPanelProps {
-  /** All agent text (concatenated) — the panel scans it automatically. */
-  texts: string[];
+  /** Controlled: the target to show. null = panel is hidden. */
+  target: PreviewTarget | null;
   /** Panel width (default 380px). */
   width?: number;
+  /** Called when the user clicks the close button. */
+  onClose: () => void;
 }
 
 type FileResult =
@@ -16,85 +18,78 @@ type FileResult =
   | { type: "image"; url: string }
   | { type: "error"; error: string };
 
-export default function PreviewPanel({ texts, width = 380 }: PreviewPanelProps) {
-  const [targets, setTargets] = useState<PreviewTarget[]>([]);
-  const [active, setActive] = useState<PreviewTarget | null>(null);
+export default function PreviewPanel({ target, width = 380, onClose }: PreviewPanelProps) {
   const [fileResult, setFileResult] = useState<FileResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // allow drilling into sub-paths from a dir listing
+  const [activePath, setActivePath] = useState<string | null>(null);
 
-  // rescan whenever the text changes
+  // reset drill-down whenever the top-level target changes
   useEffect(() => {
-    const all = texts.join("\n");
-    const found = detectTargets(all);
-    setTargets(found);
-    // auto-select any new target that was not there before
-    if (found.length > 0) {
-      setActive((prev) => {
-        const stillThere = prev && found.some((t) =>
-          t.kind === prev.kind && (t.kind === "web" ? t.url === (prev as any).url : t.path === (prev as any).path)
-        );
-        return stillThere ? prev : found[found.length - 1];
-      });
-    }
-  }, [texts]);
+    setActivePath(null);
+    setFileResult(null);
+  }, [target]);
 
-  // load the file when active switches to a file target
+  // resolve the effective file path (drill-down overrides)
+  const filePath = activePath ?? (target?.kind === "file" ? target.path : null);
+
+  // load file whenever filePath changes
   useEffect(() => {
-    if (!active || active.kind !== "file") { setFileResult(null); return; }
-    const ext = active.path.split(".").pop()?.toLowerCase() ?? "";
+    if (!filePath) { setFileResult(null); return; }
+    const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
     const imageExts = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
     if (imageExts.has(ext)) {
-      setFileResult({ type: "image", url: `/api/preview?path=${encodeURIComponent(active.path)}` });
+      setFileResult({ type: "image", url: `/api/preview?path=${encodeURIComponent(filePath)}` });
       return;
     }
     setLoading(true);
     setFileResult(null);
-    fetch(`/api/preview?path=${encodeURIComponent(active.path)}`)
+    fetch(`/api/preview?path=${encodeURIComponent(filePath)}`)
       .then((r) => r.json())
       .then((d) => setFileResult(d))
       .catch((e) => setFileResult({ type: "error", error: e.message }))
       .finally(() => setLoading(false));
-  }, [active]);
+  }, [filePath]);
 
-  if (targets.length === 0) return null;
+  if (!target) return null;
 
-  const key = (t: PreviewTarget) => t.kind === "web" ? t.url : t.path;
-  const isActive = (t: PreviewTarget) => active ? key(t) === key(active) : false;
+  const label = target.kind === "web" ? target.url : target.path;
+  const displayLabel = target.label;
 
   return (
     <div className="preview-panel" style={{ width }}>
-      {/* tab list */}
-      <div className="preview-tabs">
-        {targets.map((t) => (
+      {/* header */}
+      <div className="preview-panel-header">
+        <span className="preview-panel-icon">{target.kind === "web" ? "🌐" : "📄"}</span>
+        <span className="preview-panel-title" title={label}>{displayLabel}</span>
+        {activePath && activePath !== (target.kind === "file" ? target.path : null) && (
           <button
-            key={key(t)}
-            className={`preview-tab${isActive(t) ? " active" : ""}`}
-            onClick={() => setActive(t)}
-            title={t.kind === "web" ? t.url : t.path}
-          >
-            <span className="preview-tab-icon">{t.kind === "web" ? "🌐" : "📄"}</span>
-            <span className="preview-tab-label">{t.label}</span>
-          </button>
-        ))}
+            className="preview-back-btn"
+            onClick={() => setActivePath(null)}
+            title="Back"
+          >← Back</button>
+        )}
+        <button
+          className="preview-close-btn"
+          onClick={onClose}
+          title="Close preview"
+          aria-label="Close preview"
+        >✕</button>
       </div>
 
       {/* content */}
       <div className="preview-content">
-        {!active && (
-          <div className="preview-empty">Pick a tab to see a preview.</div>
-        )}
-
-        {active?.kind === "web" && (
+        {target.kind === "web" && (
           <iframe
-            key={active.url}
-            src={active.url}
+            key={target.url}
+            src={target.url}
             className="preview-iframe"
             sandbox="allow-scripts allow-same-origin allow-forms"
-            title={active.label}
+            title={target.label}
           />
         )}
 
-        {active?.kind === "file" && (
+        {target.kind === "file" && (
           <>
             {loading && (
               <div className="preview-loading">
@@ -104,31 +99,26 @@ export default function PreviewPanel({ texts, width = 380 }: PreviewPanelProps) 
             {!loading && fileResult?.type === "image" && (
               <div className="preview-image-wrap">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={fileResult.url} alt={active.label} className="preview-image" />
+                <img src={fileResult.url} alt={displayLabel} className="preview-image" />
               </div>
             )}
             {!loading && fileResult?.type === "text" && (
               <div className="preview-text-wrap">
-                <div className="preview-file-meta">{active.path}</div>
+                <div className="preview-file-meta">{filePath}</div>
                 <pre className="preview-code"><code>{fileResult.content}</code></pre>
               </div>
             )}
             {!loading && fileResult?.type === "dir" && (
               <div className="preview-text-wrap">
-                <div className="preview-file-meta">{active.path}</div>
+                <div className="preview-file-meta">{filePath}</div>
                 <div className="preview-dir-list">
                   {fileResult.entries.map((e) => (
                     <div
                       key={e.name}
                       className="preview-dir-item"
                       onClick={() => {
-                        const newPath = active.path.replace(/\/$/, "") + "/" + e.name;
-                        setActive({ kind: "file", path: newPath, label: e.name });
-                        setTargets((prev) => {
-                          const exists = prev.some((t) => t.kind === "file" && t.path === newPath);
-                          if (exists) return prev;
-                          return [...prev, { kind: "file", path: newPath, label: e.name }];
-                        });
+                        const newPath = (filePath ?? "").replace(/\/$/, "") + "/" + e.name;
+                        setActivePath(newPath);
                       }}
                     >
                       <span>{e.isDir ? "📁" : "📄"}</span>

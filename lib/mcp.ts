@@ -282,6 +282,12 @@ export async function getToolStatuses(): Promise<Record<string, ToolStatus>> {
     monitoring = { status: "unconfigured", detail: "No Grafana/Prometheus/Loki connection yet" };
   }
 
+  // Vision (read_image): forwards attached images to the configured vision model.
+  const visionModel = cfg.ai.visionModel?.trim();
+  const vision: ToolStatus = visionModel
+    ? { status: "connected", detail: `via ${visionModel}` }
+    : { status: "connected", detail: "via the active default model — set a dedicated vision model in Connections" };
+
   return {
     filesystem: state.filesystem.status,
     gitlab: state.gitlab.status,
@@ -292,6 +298,7 @@ export async function getToolStatuses(): Promise<Record<string, ToolStatus>> {
     redis,
     env,
     monitoring,
+    vision,
   };
 }
 

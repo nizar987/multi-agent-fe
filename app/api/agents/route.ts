@@ -11,7 +11,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const b = await req.json();
   const r = getDb()
-    .prepare("INSERT INTO agents(name,description,system_prompt,model_override,tools,skill_ids,avatar,color,shell_auto) VALUES(?,?,?,?,?,?,?,?,?)")
+    .prepare("INSERT INTO agents(name,description,system_prompt,model_override,tools,skill_ids,avatar,color,shell_auto,category) VALUES(?,?,?,?,?,?,?,?,?,?)")
     .run(
       b.name ?? "New agent",
       b.description ?? "",
@@ -21,7 +21,8 @@ export async function POST(req: NextRequest) {
       JSON.stringify(b.skill_ids ?? []),
       b.avatar ?? "🤖",
       b.color ?? "#c15f3c",
-      b.shell_auto ? 1 : 0
+      b.shell_auto ? 1 : 0,
+      typeof b.category === "string" ? b.category.trim() : ""
     );
   return NextResponse.json({ id: Number(r.lastInsertRowid) });
 }

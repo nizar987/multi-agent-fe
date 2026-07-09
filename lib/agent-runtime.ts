@@ -3,7 +3,7 @@
  * limit), shared memory tools, skills injected into the system prompt.
  */
 import { getDb } from "./db";
-import { callAi, AiTool, AiMessage } from "./ai";
+import { callAiStream, AiTool, AiMessage } from "./ai";
 import { listMcpTools, callMcpTool, McpServerName } from "./mcp";
 import { githubToolDefs, callGithubTool } from "./tools-github";
 import { tavilyToolDefs, callTavilyTool } from "./tools-tavily";
@@ -12,10 +12,13 @@ import { memoryRead, memoryWrite, memoryDelete, memoryList } from "./memory";
 import { databaseToolDefs, redisToolDefs, callDatabaseTool, callRedisTool, isReadOnlySql, redisWriteDetail } from "./tools-db";
 import { envToolDefs, callEnvTool, resolveEnvPath } from "./tools-env";
 import { shellToolDef, runShell, awaitApproval } from "./shell";
+import { cronToolDefs, callCronTool } from "./tools-cron";
+import { visionToolDef, callVisionTool } from "./tools-vision";
+import { awaitAnswer, AskOption } from "./ask";
 import { logger } from "./logger";
 
 export const MAX_DELEGATION_DEPTH = 2;
-const MAX_LOOP_ITERATIONS = 12;
+const MAX_LOOP_ITERATIONS = 100;
 
 export type AgentRow = {
   id: number; name: string; description: string; system_prompt: string;
@@ -40,6 +43,8 @@ export type RunEvent =
   | { type: "system_notice"; text: string }
   | { type: "approval_request"; id: string; kind: ApprovalKind; detail: string }
   | { type: "approval_resolved"; id: string; approved: boolean }
+  | { type: "ask_user"; id: string; question: string; options: AskOption[] }
+  | { type: "ask_resolved"; id: string; answer: string }
   | { type: "delegate_start"; agent: string }
   | { type: "delegate_end"; agent: string }
   | { type: "done"; finalText: string }
@@ -65,6 +70,12 @@ export interface RunOptions {
   readOnlySql?: boolean;
   /** Force a specific model for this run (and delegated sub-agents). */
   modelOverride?: string;
+  /**
+   * True when a user is live in chat: enables ask_user (multiple-choice
+   * questions) and the agent's own schedule (cron) tools. Autonomous runs
+   * (cron / manager workers) leave this off so nothing blocks on user input.
+   */
+  interactive?: boolean;
 }
 const PLAN_MSG =
   "Plan mode is active — the action was NOT executed. Explain to the user the plan/actions you intend to take; " +
@@ -78,7 +89,12 @@ async function requestApproval(
   detail: string
 ): Promise<boolean> {
   onEvent({ type: "approval_request", id, kind, detail });
-  const approved = await awaitApproval(id);
+  const decision = await awaitApproval(id);
+  if (decision === "always") {
+    const { addAllowed } = await import("./allowlist");
+    addAllowed(kind, detail);
+  }
+  const approved = decision !== "deny";
   onEvent({ type: "approval_resolved", id, approved });
   return approved;
 }
@@ -93,6 +109,12 @@ async function gateRiskyAction(
 ): Promise<string | null> {
   if (mode === "act") return null;
   if (mode === "plan") return PLAN_MSG;
+  // Allowlisted actions ("Always allow") skip the approval card.
+  const { isAllowed } = await import("./allowlist");
+  if (isAllowed(kind, detail)) {
+    onEvent({ type: "system_notice", text: `✓ Auto-allowed (${kind}) — in the allowed list: ${detail.slice(0, 120)}` });
+    return null;
+  }
   return (await requestApproval(onEvent, id, kind, detail)) ? null : REJECTED_MSG;
 }
 
@@ -123,6 +145,37 @@ const memoryToolDefs: AiTool[] = [
   },
 ];
 
+const askUserToolDef: AiTool = {
+  name: "ask_user",
+  description:
+    "Ask the user a question with 2–4 answer options rendered as clickable buttons in chat. " +
+    "ALWAYS use this instead of a plain-text question when you need the user to make a decision. " +
+    "Mark the best option with recommended=true and clearly inferior ones with recommended=false. " +
+    "The user can always type a custom answer, so never add an 'Other' option yourself. " +
+    "Returns the user's answer as text.",
+  input_schema: {
+    type: "object",
+    properties: {
+      question: { type: "string", description: "the question to ask" },
+      options: {
+        type: "array",
+        minItems: 2,
+        maxItems: 4,
+        items: {
+          type: "object",
+          properties: {
+            label: { type: "string", description: "short answer text (1–6 words)" },
+            description: { type: "string", description: "what this choice means / its trade-offs" },
+            recommended: { type: "boolean", description: "true = recommended, false = not recommended, omit = neutral" },
+          },
+          required: ["label"],
+        },
+      },
+    },
+    required: ["question", "options"],
+  },
+};
+
 function delegateToolDef(exceptAgentId: number): AiTool {
   const agents = getDb()
     .prepare("SELECT name, description FROM agents WHERE id != ?")
@@ -144,7 +197,7 @@ function delegateToolDef(exceptAgentId: number): AiTool {
 
 async function assembleTools(agent: AgentRow): Promise<{
   defs: AiTool[];
-  route: Map<string, { kind: "mcp"; server: McpServerName; tool: string } | { kind: "github" } | { kind: "tavily" } | { kind: "memory" } | { kind: "delegate" } | { kind: "shell" } | { kind: "database" } | { kind: "redis" } | { kind: "env" } | { kind: "monitoring" }>;
+  route: Map<string, { kind: "mcp"; server: McpServerName; tool: string } | { kind: "github" } | { kind: "tavily" } | { kind: "memory" } | { kind: "delegate" } | { kind: "shell" } | { kind: "database" } | { kind: "redis" } | { kind: "env" } | { kind: "monitoring" } | { kind: "ask" } | { kind: "cron" } | { kind: "vision" }>;
   notices: string[];
 }> {
   const enabled: string[] = JSON.parse(agent.tools || "[]");
@@ -171,6 +224,10 @@ async function assembleTools(agent: AgentRow): Promise<{
       } catch (e: any) {
         notices.push(`Tavily MCP disconnected (${String(e?.message ?? e).slice(0, 100)}) — the answer was produced without it.`);
       }
+    } else if (t === "vision") {
+      // read_image — forwards attached images to the configured vision model.
+      defs.push(visionToolDef);
+      route.set(visionToolDef.name, { kind: "vision" });
     } else if (t === "memory") {
       for (const d of memoryToolDefs) { defs.push(d); route.set(d.name, { kind: "memory" }); }
     } else if (t === "delegate") {
@@ -241,6 +298,48 @@ function buildSystemPrompt(agent: AgentRow): string {
   return sys;
 }
 
+/**
+ * Fallback for models that write tool calls as plain text instead of using
+ * native tool_use — e.g. `<answer>{"tool_name": "ask_user", "params": {...}}</answer>`.
+ * Extracts the call so the loop can execute it for real, and returns the
+ * reply text with the JSON blob stripped out.
+ */
+function extractTextToolCall(
+  text: string,
+  isKnownTool: (name: string) => boolean
+): { name: string; input: Record<string, unknown>; cleanedText: string } | null {
+  const keyMatch = text.match(/"(?:tool_name|tool|function|name)"\s*:/);
+  if (!keyMatch || keyMatch.index === undefined) return null;
+
+  // Find the JSON object enclosing that key (string-aware brace matching).
+  const start = text.lastIndexOf("{", keyMatch.index);
+  if (start < 0) return null;
+  let depth = 0, end = -1, inStr = false, esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (esc) { esc = false; continue; }
+    if (ch === "\\") { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === "{") depth++;
+    else if (ch === "}") { depth--; if (depth === 0) { end = i; break; } }
+  }
+  if (end < 0) return null;
+
+  let obj: any;
+  try { obj = JSON.parse(text.slice(start, end + 1)); } catch { return null; }
+  const name = obj?.tool_name ?? obj?.tool ?? obj?.function ?? obj?.name;
+  if (typeof name !== "string" || !isKnownTool(name)) return null;
+  const rawInput = obj.params ?? obj.parameters ?? obj.arguments ?? obj.input ?? {};
+  const input = rawInput && typeof rawInput === "object" ? rawInput : {};
+
+  const cleanedText = (text.slice(0, start) + text.slice(end + 1))
+    .replace(/<\/?(answer|tool_call|function_call|tool_use|tool)>/gi, "")
+    .replace(/```(?:json)?\s*```/g, "")
+    .trim();
+  return { name, input, cleanedText };
+}
+
 export async function runAgent(
   agentId: number,
   history: AiMessage[],
@@ -256,6 +355,14 @@ export async function runAgent(
   const { defs, route, notices } = await assembleTools(agent);
   for (const n of notices) onEvent({ type: "system_notice", text: n });
 
+  // Interactive-only built-ins: multiple-choice questions + the agent's own schedules.
+  if (opts.interactive && depth === 0) {
+    defs.push(askUserToolDef);
+    route.set(askUserToolDef.name, { kind: "ask" });
+    for (const d of cronToolDefs) { defs.push(d); route.set(d.name, { kind: "cron" }); }
+  }
+
+
   const messages: AiMessage[] = [...history];
   let finalText = "";
 
@@ -266,20 +373,62 @@ export async function runAgent(
       "(shell, data-modifying SQL, Redis writes, reading .env files) — those actions are blocked automatically. " +
       "Produce a clear step-by-step plan, then suggest the user switch to Approval/Act mode to execute it.";
   }
+  if (opts.interactive && depth === 0) {
+    system +=
+      "\n\n# Interactive tools\n" +
+      "- When you need the user to make a decision, use the ask_user tool: give 2–4 concrete options, " +
+      "mark the best one recommended=true and clearly worse ones recommended=false, with a short description of trade-offs. " +
+      "Do not ask decision questions in plain text.\n" +
+      "- When the user wants something to run on a schedule (e.g. 'every morning', 'weekly report'), " +
+      "use schedule_task_create. First confirm the schedule with ask_user (offer a few sensible schedule options). " +
+      "Use schedule_task_list / schedule_task_delete to review or remove your schedules.";
+  }
+  if (defs.length > 0) {
+    system +=
+      "\n\n# Tool calling\nAlways call tools through the native tool-use mechanism. " +
+      "NEVER write a tool call as JSON, XML, or wrapper tags (like <answer> or <tool_call>) in your reply text.";
+  }
+  if (route.has("read_image")) {
+    system +=
+      "\n\n# Images\nYou CAN understand attached images: whenever the user refers to an attached " +
+      "image/photo/screenshot, call the read_image tool with a specific question about it. " +
+      "NEVER claim you cannot see images — even if earlier messages in this conversation say so, " +
+      "the read_image tool is available NOW and overrides those earlier statements.";
+  }
 
   let iter = 0;
   for (; iter < MAX_LOOP_ITERATIONS; iter++) {
-    const resp = await callAi({
+    const resp = await callAiStream({
       system,
       messages,
       tools: defs,
       model: opts.modelOverride ?? agent.model_override ?? undefined,
+      // stream partial text to the chatbox as the AI generates it
+      onText: (t) => onEvent({ type: "text", text: t }),
     });
 
     const textParts = (resp.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text);
     if (textParts.length) {
       finalText = textParts.join("\n");
       onEvent({ type: "text", text: finalText });
+    }
+
+    // Fallback: some models write the tool call as plain text (e.g.
+    // `<answer>{"tool_name": "ask_user", ...}</answer>`) instead of native
+    // tool_use. Detect it, strip the blob from the visible text, and inject
+    // a real tool_use block so the normal execution path below handles it.
+    if (resp.stop_reason !== "tool_use" && finalText && route.size > 0) {
+      const parsed = extractTextToolCall(finalText, (n) => route.has(n));
+      if (parsed) {
+        logger.warn(`Agent "${agent.name}" emitted a text-based tool call for "${parsed.name}" — recovered.`);
+        finalText = parsed.cleanedText;
+        onEvent({ type: "text", text: finalText }); // replace the raw blob in the UI
+        resp.content = [
+          ...(parsed.cleanedText ? [{ type: "text", text: parsed.cleanedText }] : []),
+          { type: "tool_use", id: `texttool_${Date.now()}_${iter}`, name: parsed.name, input: parsed.input },
+        ];
+        resp.stop_reason = "tool_use";
+      }
     }
 
     if (resp.stop_reason !== "tool_use") break;
@@ -334,7 +483,21 @@ export async function runAgent(
         } else if (r.kind === "shell") {
           const cmd = String((block.input as any).command ?? "");
           const denied = await gateRiskyAction(mode, onEvent, block.id, "shell", cmd);
-          resultStr = denied ?? (await runShell(cmd));
+          resultStr = denied ?? (await runShell(cmd, agentId));
+        } else if (r.kind === "ask") {
+          const inp: any = block.input;
+          const options: AskOption[] = Array.isArray(inp?.options)
+            ? inp.options.filter((o: any) => typeof o?.label === "string" && o.label.trim())
+            : [];
+          onEvent({ type: "ask_user", id: block.id, question: String(inp?.question ?? ""), options });
+          const answer = await awaitAnswer(block.id);
+          const finalAnswer = answer ?? "(no answer from the user — proceed with the recommended option)";
+          onEvent({ type: "ask_resolved", id: block.id, answer: finalAnswer });
+          resultStr = `User answered: ${finalAnswer}`;
+        } else if (r.kind === "cron") {
+          resultStr = await callCronTool(agent.id, block.name, block.input);
+        } else if (r.kind === "vision") {
+          resultStr = await callVisionTool(messages, block.input);
         } else if (r.kind === "delegate") {
           const inp: any = block.input;
           if (depth >= MAX_DELEGATION_DEPTH) {
@@ -361,6 +524,9 @@ export async function runAgent(
     messages.push({ role: "user", content: results });
   }
 
+  if (!finalText.trim()) {
+    logger.warn(`Agent "${agent.name}" finished with an EMPTY answer (iterations=${iter}) — check the provider/model response.`);
+  }
   logger.info(`Agent run completed: "${agent.name}" (id=${agentId}, iterations=${iter})`);
   return finalText;
 }

@@ -48,6 +48,11 @@ export async function readFileToAttachment(file: File): Promise<PickedAttachment
     const base64 = dataUrl.split(",")[1] ?? "";
     return { name: file.name, kind: "document" as AttachmentKind, mediaType: "application/pdf", data: base64 };
   }
+  // gambar dgn format yang TIDAK didukung API (HEIC/TIFF/BMP dll.) — tolak dgn jelas,
+  // jangan biarkan lolos sebagai "teks" acak yang membuat model tak melihat foto.
+  if (type.startsWith("image/") || /\.(heic|heif|tiff?|bmp|avif)$/i.test(file.name)) {
+    return { error: `${file.name}: format gambar tidak didukung — pakai PNG, JPEG, GIF, atau WebP (foto iPhone HEIC perlu dikonversi dulu).` };
+  }
   // file teks/kode
   if (TEXTLIKE_EXT.test(file.name) || type.startsWith("text/") || file.size < 512 * 1024) {
     const text = await readAsText(file);
@@ -59,4 +64,50 @@ export async function readFileToAttachment(file: File): Promise<PickedAttachment
 /** Buang previewUrl sebelum kirim ke server (tidak dibutuhkan API). */
 export function toWire(a: PickedAttachment): Attachment {
   return { name: a.name, kind: a.kind, mediaType: a.mediaType, data: a.data };
+}
+
+/* ---------- rekonstruksi lampiran dari pesan tersimpan ---------- */
+
+export interface StoredAtt {
+  name: string;
+  kind: "image" | "document" | "text";
+  /** data URL utk thumbnail (hanya gambar, dari blok base64 di meta). */
+  previewUrl?: string;
+}
+
+const ATTACH_TAG = /\n?\[lampiran: ([^\]]+)\]\s*$/;
+
+/** Hilangkan tag "[lampiran: …]" dari teks tampilan. */
+export function stripAttachTag(content: string): string {
+  return content.replace(ATTACH_TAG, "").trimEnd();
+}
+
+/**
+ * Bangun ulang objek lampiran (chip/thumbnail) dari pesan yang di-load dari
+ * DB: nama diambil dari tag "[lampiran: …]", preview gambar dari blok base64
+ * di kolom meta (contentBlocks). Blok lampiran selalu berada di URUTAN AKHIR
+ * contentBlocks, sesuai urutan nama di tag.
+ */
+export function parseStoredMessage(content: string, meta?: string | null): { text: string; atts: StoredAtt[] } {
+  const m = content.match(ATTACH_TAG);
+  if (!m) return { text: content, atts: [] };
+  const names = m[1].split(", ");
+  const text = content.slice(0, m.index).trimEnd();
+
+  let blocks: any[] = [];
+  try {
+    const parsed = meta ? JSON.parse(meta) : null;
+    if (Array.isArray(parsed?.contentBlocks)) blocks = parsed.contentBlocks;
+  } catch { /* meta rusak → chip tanpa preview */ }
+  const attBlocks = blocks.length >= names.length ? blocks.slice(blocks.length - names.length) : [];
+
+  const atts: StoredAtt[] = names.map((name, i) => {
+    const b = attBlocks[i];
+    if (b?.type === "image" && b.source?.data) {
+      return { name, kind: "image", previewUrl: `data:${b.source.media_type};base64,${b.source.data}` };
+    }
+    if (b?.type === "document") return { name, kind: "document" };
+    return { name, kind: "text" };
+  });
+  return { text, atts };
 }

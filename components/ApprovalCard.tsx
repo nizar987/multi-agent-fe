@@ -1,6 +1,7 @@
 "use client";
 
 export type ApprovalKind = "shell" | "database" | "redis" | "env";
+export type ApprovalDecision = "always" | "once" | "deny";
 
 export interface ApprovalItem {
   id: string;
@@ -11,7 +12,7 @@ export interface ApprovalItem {
 
 interface ApprovalCardProps {
   item: ApprovalItem;
-  onDecide: (id: string, approved: boolean) => void;
+  onDecide: (id: string, decision: ApprovalDecision) => void;
 }
 
 const TITLES: Record<ApprovalKind, string> = {
@@ -32,9 +33,22 @@ export default function ApprovalCard({ item, onDecide }: ApprovalCardProps) {
       </div>
       <pre className="shell-cmd">{item.detail}</pre>
       {item.state === "pending" && (
-        <div className="row" style={{ marginTop: 8 }}>
-          <button className="btn btn-primary" onClick={() => onDecide(item.id, true)}>Run</button>
-          <button className="btn btn-danger-ghost" onClick={() => onDecide(item.id, false)}>Reject</button>
+        <div className="row" style={{ marginTop: 8, flexWrap: "wrap", gap: 6 }}>
+          <button
+            className="btn btn-primary"
+            onClick={() => onDecide(item.id, "once")}
+            title="Run it this one time"
+          >Allow once</button>
+          <button
+            className="btn"
+            onClick={() => onDecide(item.id, "always")}
+            title="Run it now and add to the allowed list — this exact action won't ask again"
+          >✓ Always allow</button>
+          <button
+            className="btn btn-danger-ghost"
+            onClick={() => onDecide(item.id, "deny")}
+            title="Don't run it"
+          >Deny</button>
         </div>
       )}
     </div>

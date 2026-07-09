@@ -1,6 +1,7 @@
 "use client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useState, useCallback } from "react";
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -41,6 +42,75 @@ export function ToolProgress({ tools }: { tools: { tool: string; done: boolean; 
           {!t.done && <span className="tool-progress-bar"><span /></span>}
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Code block with copy button                                         */
+/* ------------------------------------------------------------------ */
+
+function CodeBlock({ children, className }: { children: React.ReactNode; className?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  // Extract language from className (e.g. "language-typescript")
+  const lang = className?.replace("language-", "") ?? "";
+
+  const code = typeof children === "string"
+    ? children
+    : Array.isArray(children)
+      ? children.map((c) => (typeof c === "string" ? c : "")).join("")
+      : String(children ?? "");
+
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(code.trimEnd());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // fallback for older Electron versions
+      const el = document.createElement("textarea");
+      el.value = code.trimEnd();
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }, [code]);
+
+  return (
+    <div className="code-block-wrap">
+      <div className="code-block-header">
+        {lang && <span className="code-block-lang">{lang}</span>}
+        <button
+          className={`code-copy-btn${copied ? " copied" : ""}`}
+          onClick={copy}
+          title={copied ? "Copied!" : "Copy code"}
+          aria-label={copied ? "Copied!" : "Copy code"}
+        >
+          {copied ? (
+            <>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              Copied
+            </>
+          ) : (
+            <>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+              </svg>
+              Copy
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="code-block-pre">
+        <code className={className}>{children}</code>
+      </pre>
     </div>
   );
 }
@@ -113,7 +183,7 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
 /* Main MessageBody — markdown + chart rendering                       */
 /* ------------------------------------------------------------------ */
 
-export default function MessageBody({ text, isError }: { text: string; isError?: boolean }) {
+export default function MessageBody({ text, isError, onOpenPreview }: { text: string; isError?: boolean; onOpenPreview?: (href: string) => void }) {
   if (!text) return null;
 
   // Split text into segments: chart blocks vs normal markdown
@@ -136,7 +206,7 @@ export default function MessageBody({ text, isError }: { text: string; isError?:
             const spec: ChartSpec = JSON.parse(seg.content);
             return <ChartBlock key={i} spec={spec} />;
           } catch {
-            return <pre key={i} className="code-block">{seg.content}</pre>;
+            return <CodeBlock key={i}>{seg.content}</CodeBlock>;
           }
         }
         return (
@@ -148,10 +218,32 @@ export default function MessageBody({ text, isError }: { text: string; isError?:
                 const inline = !className;
                 return inline
                   ? <code className="inline-code" {...props}>{children}</code>
-                  : <pre className="code-block"><code {...props}>{children}</code></pre>;
+                  : <CodeBlock className={className}>{children}</CodeBlock>;
               },
               table({ children }: any) {
                 return <div className="table-wrap"><table>{children}</table></div>;
+              },
+              a({ href, children, ...props }: any) {
+                if (!href) return <a {...props}>{children}</a>;
+                // If consumer provided a preview handler, render as a preview button
+                if (onOpenPreview) {
+                  return (
+                    <button
+                      className="preview-link-btn"
+                      onClick={() => onOpenPreview(href)}
+                      title={`Open preview: ${href}`}
+                    >
+                      {children}
+                      <span className="preview-link-icon" aria-hidden>↗</span>
+                    </button>
+                  );
+                }
+                // fallback: open externally
+                return (
+                  <a href={href} target="_blank" rel="noreferrer noopener" {...props}>
+                    {children}
+                  </a>
+                );
               },
             }}
           >

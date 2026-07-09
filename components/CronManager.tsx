@@ -16,19 +16,10 @@ type CronJob = {
 
 type Agent = { id: number; name: string; avatar?: string; color?: string };
 
-const PRESETS = [
-  { label: "Every hour", value: "0 * * * *" },
-  { label: "Every day at 9 AM", value: "0 9 * * *" },
-  { label: "Every day at 6 PM", value: "0 18 * * *" },
-  { label: "Every Monday 9 AM", value: "0 9 * * 1" },
-  { label: "Every weekday 9 AM", value: "0 9 * * 1-5" },
-];
-
-function describeCron(expr: string): string {
-  const p = PRESETS.find((p) => p.value === expr);
-  if (p) return p.label;
-  return expr;
-}
+import {
+  Freq, FriendlySchedule, DAY_NAMES, DEFAULT_SCHEDULE,
+  parseSchedule, buildSchedule, describeCron,
+} from "@/lib/schedule";
 
 export default function CronManager() {
   const [jobs, setJobs] = useState<CronJob[]>([]);
@@ -82,7 +73,7 @@ export default function CronManager() {
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <span className="muted small">Schedule agent tasks to run automatically.</span>
         <span style={{ flex: 1 }} />
-        <button className="btn btn-primary" onClick={() => { setEditing(null); setShowForm(true); }}>+ New cron</button>
+        <button className="btn btn-primary" onClick={() => { setEditing(null); setShowForm(true); }}>+ New schedule</button>
       </div>
 
       {jobs.length === 0 && !showForm && (
@@ -98,7 +89,7 @@ export default function CronManager() {
           <div className="grow">
             <div style={{ fontWeight: 500 }}>{job.name}</div>
             <div className="muted small" style={{ marginTop: 2 }}>
-              {job.agent_name} · <code style={{ fontSize: 11 }}>{describeCron(job.schedule)}</code>
+              {job.agent_name} · <span title={job.schedule}>⏰ {describeCron(job.schedule)}</span>
             </div>
             <div className="muted small" style={{ marginTop: 4, fontSize: 12, opacity: 0.7 }}>
               {job.prompt.slice(0, 100)}{job.prompt.length > 100 ? "…" : ""}
@@ -144,12 +135,17 @@ function CronForm({ job, agents, onSave, onCancel }: {
 }) {
   const [name, setName] = useState(job?.name || "");
   const [agentId, setAgentId] = useState(job?.agent_id || (agents[0]?.id ?? 0));
-  const [schedule, setSchedule] = useState(job?.schedule || "0 9 * * *");
+  const [sched, setSched] = useState<FriendlySchedule>(() =>
+    job?.schedule ? parseSchedule(job.schedule) : { ...DEFAULT_SCHEDULE }
+  );
   const [prompt, setPrompt] = useState(job?.prompt || "");
+
+  const schedule = buildSchedule(sched);
+  const patch = (p: Partial<FriendlySchedule>) => setSched((s) => ({ ...s, ...p }));
 
   return (
     <div className="card" style={{ marginTop: 12, padding: 16 }}>
-      <h3>{job ? "Edit cron job" : "New cron job"}</h3>
+      <h3>{job ? "Edit schedule" : "New schedule"}</h3>
       <div className="field">
         <label>Name</label>
         <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Daily summary" />
@@ -163,20 +159,77 @@ function CronForm({ job, agents, onSave, onCancel }: {
         </select>
       </div>
       <div className="field">
-        <label>Schedule (cron expression)</label>
-        <input className="input mono" value={schedule} onChange={(e) => setSchedule(e.target.value)} placeholder="0 9 * * *" />
-        <div className="hint">
-          Presets:{" "}
-          {PRESETS.map((p) => (
-            <button
-              key={p.value}
-              className="btn"
-              style={{ fontSize: 11, padding: "2px 8px", marginRight: 4 }}
-              onClick={() => setSchedule(p.value)}
+        <label>Repeat</label>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select
+            className="input"
+            style={{ width: 190 }}
+            value={sched.freq}
+            onChange={(e) => patch({ freq: e.target.value as Freq })}
+          >
+            <option value="hourly">Every hour</option>
+            <option value="daily">Every day</option>
+            <option value="weekdays">Weekdays (Mon–Fri)</option>
+            <option value="weekly">Every week</option>
+            <option value="monthly">Every month</option>
+            <option value="custom">Custom (advanced)</option>
+          </select>
+
+          {sched.freq === "weekly" && (
+            <select
+              className="input"
+              style={{ width: 140 }}
+              value={sched.weekday}
+              onChange={(e) => patch({ weekday: Number(e.target.value) })}
+              aria-label="Day of the week"
             >
-              {p.label}
-            </button>
-          ))}
+              {DAY_NAMES.map((d, i) => <option key={i} value={i}>{d}</option>)}
+            </select>
+          )}
+
+          {sched.freq === "monthly" && (
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+              on day
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={31}
+                style={{ width: 70 }}
+                value={sched.monthday}
+                onChange={(e) => patch({ monthday: Math.min(31, Math.max(1, Number(e.target.value) || 1)) })}
+                aria-label="Day of the month"
+              />
+            </label>
+          )}
+
+          {sched.freq !== "hourly" && sched.freq !== "custom" && (
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+              at
+              <input
+                className="input"
+                type="time"
+                style={{ width: 120 }}
+                value={sched.time}
+                onChange={(e) => patch({ time: e.target.value || "09:00" })}
+                aria-label="Time"
+              />
+            </label>
+          )}
+
+          {sched.freq === "custom" && (
+            <input
+              className="input mono"
+              style={{ width: 160 }}
+              value={sched.custom}
+              onChange={(e) => patch({ custom: e.target.value })}
+              placeholder="0 9 * * *"
+              title="Cron expression: minute hour day-of-month month day-of-week"
+            />
+          )}
+        </div>
+        <div className="hint" style={{ marginTop: 6 }}>
+          ⏰ Runs: <strong>{describeCron(schedule)}</strong>
         </div>
       </div>
       <div className="field">

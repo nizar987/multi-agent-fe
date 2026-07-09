@@ -14,6 +14,7 @@ import {
   testPrometheus,
   testLoki,
 } from "@/lib/connections";
+import { testAiConnection, testAiVision, detectProvider } from "@/lib/ai";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +28,28 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   const secret = getConnectionSecret(id);
 
   let result: { ok: boolean; message: string };
-  if (conn.kind === "github") {
+  if (conn.kind === "ai") {
+    if (!secret) return NextResponse.json({ ok: false, message: "No API key stored for this connection." });
+    const baseUrl = String(cfg.baseUrl || "https://api.anthropic.com");
+    // Resolve "auto" to a concrete provider via URL detection so the test
+    // always uses the correct wire format (OpenAI vs Anthropic vs Gemini).
+    const resolvedProvider =
+      cfg.provider && cfg.provider !== "auto"
+        ? (cfg.provider as any)
+        : detectProvider(baseUrl);
+    const aiParams = {
+      baseUrl,
+      model: String(cfg.model || ""),
+      apiKey: secret,
+      provider: resolvedProvider,
+    };
+    result = await testAiConnection(aiParams);
+    if (result.ok) {
+      // Also verify the endpoint actually passes images through to the model.
+      const vision = await testAiVision(aiParams);
+      result = { ok: result.ok, message: `${result.message} · ${vision.message}` };
+    }
+  } else if (conn.kind === "github") {
     if (!secret) return NextResponse.json({ ok: false, message: "No token stored for this connection." });
     result = await testGithub(secret);
   } else if (conn.kind === "gitlab") {
@@ -36,9 +58,9 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   } else if (conn.kind === "database") {
     result = await testDatabase(
       {
-        type: cfg.engine === "mysql" ? "mysql" : "postgres",
+        type: (cfg.engine === "mysql" || cfg.engine === "mariadb") ? "mysql" : "postgres",
         host: String(cfg.host ?? "localhost"),
-        port: Number(cfg.port) || (cfg.engine === "mysql" ? 3306 : 5432),
+        port: Number(cfg.port) || (cfg.engine === "mysql" || cfg.engine === "mariadb" ? 3306 : 5432),
         user: String(cfg.user ?? ""),
         database: String(cfg.database ?? ""),
         ssl: !!cfg.ssl,

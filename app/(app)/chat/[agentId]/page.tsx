@@ -3,14 +3,16 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import AgentAvatar from "@/components/AgentAvatar";
 import ApprovalCard, { ApprovalItem } from "@/components/ApprovalCard";
+import AskUserCard, { AskItem } from "@/components/AskUserCard";
 import PreviewPanel from "@/components/PreviewPanel";
+import { detectTargets, type PreviewTarget } from "@/lib/preview-detect";
 import ModeSelect, { RunMode } from "@/components/ModeSelect";
 import PanelIcon from "@/components/PanelIcon";
 import AttachmentBar from "@/components/AttachmentBar";
 import ConnectorModal from "@/components/ConnectorModal";
 import ModelSelect from "@/components/ModelSelect";
 import MessageBody, { ThinkingIndicator, ToolProgress } from "@/components/MessageBody";
-import { PickedAttachment, toWire } from "@/components/attachments-client";
+import { PickedAttachment, toWire, parseStoredMessage } from "@/components/attachments-client";
 
 type MsgAttachment = { name: string; kind: string; previewUrl?: string };
 
@@ -19,6 +21,7 @@ type ChatItem =
   | { kind: "tool"; tool: string; done: boolean; ok?: boolean }
   | { kind: "notice"; text: string }
   | ({ kind: "approval" } & ApprovalItem)
+  | ({ kind: "ask" } & AskItem)
   | { kind: "delegate"; agent: string; done: boolean };
 
 export default function ChatPage({ params }: { params: { agentId: string } }) {
@@ -30,22 +33,40 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [needsKey, setNeedsKey] = useState(false);
-  const [showPreview, setShowPreview] = useState(true);
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
   const [mode, setMode] = useState<RunMode>("approval");
   const [planReady, setPlanReady] = useState(false); // plan drafted → show the proceed button
   const [attachments, setAttachments] = useState<PickedAttachment[]>([]);
   const [connectorOpen, setConnectorOpen] = useState(false);
   const [descOpen, setDescOpen] = useState(false);
   const [model, setModel] = useState("");
+  const [workingDir, setWorkingDir] = useState<string | null>(null);
+  const [pickingFolder, setPickingFolder] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // collect all assistant text for the preview
-  const previewTexts = items
-    .filter((it) => it.kind === "msg" && it.role === "assistant")
-    .map((it) => (it as any).content as string);
+  // open a URL or file path in the preview panel — called by link clicks in MessageBody
+  const openPreview = (href: string) => {
+    const targets = detectTargets(href);
+    if (targets.length > 0) {
+      setPreviewTarget(targets[0]);
+    } else {
+      // plain string that wasn't detected as URL/path — treat as web URL if it looks like one
+      if (href.startsWith("http://") || href.startsWith("https://")) {
+        try {
+          const host = new URL(href).hostname.replace(/^www\./, "");
+          setPreviewTarget({ kind: "web", url: href, label: host });
+        } catch { /* invalid url, ignore */ }
+      } else {
+        setPreviewTarget({ kind: "file", path: href, label: href.split("/").pop() || href });
+      }
+    }
+  };
 
   useEffect(() => {
-    fetch(`/api/agents/${agentId}`).then((r) => r.json()).then(setAgent);
+    fetch(`/api/agents/${agentId}`).then((r) => r.json()).then((a) => {
+      setAgent(a);
+      setWorkingDir(a.working_dir ?? null);
+    });
     fetch("/api/settings").then((r) => r.json()).then((s) => setNeedsKey(!s.secrets.aiApiKey.set));
     loadConvs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -62,7 +83,14 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
     setConvId(id);
     const msgs = await fetch(`/api/conversations/${id}/messages`).then((r) => r.json());
     setItems(msgs.filter((m: any) => m.role === "user" || m.role === "assistant")
-      .map((m: any) => ({ kind: "msg", role: m.role, content: m.content })));
+      .map((m: any) => {
+        if (m.role === "user") {
+          // Rebuild attachment chips/thumbnails from the stored message.
+          const { text, atts } = parseStoredMessage(m.content, m.meta);
+          return { kind: "msg", role: "user", content: text, atts: atts.length ? atts : undefined };
+        }
+        return { kind: "msg", role: "assistant", content: m.content };
+      }));
   };
 
   const newConv = useCallback(async () => {
@@ -71,6 +99,17 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
     setItems([]);
     fetch(`/api/agents/${agentId}/conversations`).then((r) => r.json()).then(setConvs);
   }, [agentId]);
+
+  const deleteConv = async () => {
+    if (!convId || busy) return;
+    const conv = convs.find((c) => c.id === convId);
+    if (!confirm(`Delete conversation "${conv?.title ?? convId}"? This cannot be undone.`)) return;
+    await fetch(`/api/conversations/${convId}`, { method: "DELETE" });
+    const remaining = convs.filter((c) => c.id !== convId);
+    setConvs(remaining);
+    if (remaining.length > 0) selectConv(remaining[0].id);
+    else newConv();
+  };
 
   // Cmd/Ctrl+N → new conversation
   useEffect(() => {
@@ -147,6 +186,17 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
                   break;
                 }
               }
+            } else if (ev.type === "ask_user") {
+              next.push({ kind: "ask", id: ev.id, question: ev.question, options: ev.options ?? [], state: "pending" });
+              assistantIdx = -1;
+            } else if (ev.type === "ask_resolved") {
+              for (let i = next.length - 1; i >= 0; i--) {
+                const it = next[i];
+                if (it.kind === "ask" && it.id === ev.id && it.state === "pending") {
+                  next[i] = { ...it, state: "answered", answer: ev.answer };
+                  break;
+                }
+              }
             } else if (ev.type === "system_notice") {
               next.push({ kind: "notice", text: ev.text });
             } else if (ev.type === "delegate_start") {
@@ -159,6 +209,12 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
                   next[i] = { ...it, done: true };
                   break;
                 }
+              }
+            } else if (ev.type === "done") {
+              // Never end silently: if no assistant text arrived, say so.
+              const hasReply = next.some((it) => it.kind === "msg" && it.role === "assistant" && it.content);
+              if (!hasReply && !String(ev.finalText ?? "").trim()) {
+                next.push({ kind: "notice", text: "⚠ The model returned an empty answer — check the Logs page for details (provider/model may have rejected the request)." });
               }
             } else if (ev.type === "error") {
               next.push({ kind: "notice", text: `Error: ${ev.message}` });
@@ -189,11 +245,44 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
     sendMessage("Proceed: execute the plan you drafted above, step by step.", "approval");
   };
 
-  const decideApproval = async (id: string, approved: boolean) => {
+  const pickFolder = async () => {
+    setPickingFolder(true);
+    try {
+      const res = await fetch(`/api/agents/${agentId}/pick-folder`, { method: "POST" });
+      const data = await res.json();
+      if (!data.canceled && data.folder) setWorkingDir(data.folder);
+    } catch {
+      // ignore
+    } finally {
+      setPickingFolder(false);
+    }
+  };
+
+  const clearFolder = async () => {
+    await fetch(`/api/agents/${agentId}/pick-folder`, { method: "DELETE" });
+    setWorkingDir(null);
+  };
+
+  const clearChat = () => {
+    if (items.length === 0) return;
+    if (!confirm("Clear all messages in this conversation?")) return;
+    setItems([]);
+  };
+
+  const answerAsk = async (id: string, answer: string) => {
+    await fetch("/api/ask/answer", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, answer }),
+    });
+    // card state is updated by the ask_resolved event from the server
+  };
+
+  const decideApproval = async (id: string, decision: "always" | "once" | "deny") => {
     await fetch("/api/shell/approve", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id, approved }),
+      body: JSON.stringify({ id, decision }),
     });
     // card state is updated by the approval_resolved event from the server
   };
@@ -205,16 +294,15 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
           <div style={{ fontSize: 28, marginBottom: 12 }}>◆</div>
           <h2>Connect an AI model first</h2>
           <p className="muted">Agents need an AI API key to answer. Configuration only takes a minute.</p>
-          <Link href="/settings#ai" className="btn btn-primary">Open Settings → AI Provider</Link>
+          <Link href="/connections" className="btn btn-primary">Open Connections → AI Provider</Link>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ display: "flex", height: "calc(100vh - 64px)", margin: -32, overflow: "hidden" }}>
-      {/* kolom chat */}
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+    <div className="chat-shell">
+      <div className="chat-col">
         <div className="chat-header">
           <div className="chat-header-row">
             <Link href="/" className="chat-back muted" title="Back">←</Link>
@@ -237,11 +325,18 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
               {convs.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
             </select>
             <button className="btn" onClick={newConv} title="New conversation (Cmd/Ctrl+N)">+ New</button>
-            <button className="btn" onClick={() => setConnectorOpen(true)} title="Add or switch connections">+ Connector</button>
             <button
-              className={`btn btn-icon${showPreview ? " active" : ""}`}
-              onClick={() => setShowPreview((v) => !v)}
-              title={showPreview ? "Hide preview panel" : "Show preview panel"}
+              className="btn btn-danger-ghost"
+              onClick={deleteConv}
+              disabled={busy || !convId}
+              title="Delete this conversation"
+              aria-label="Delete conversation"
+            >🗑</button>
+            <button
+              className={`btn btn-icon${previewTarget ? " active" : ""}`}
+              onClick={() => setPreviewTarget((v) => v ? null : v)}
+              title={previewTarget ? "Close preview panel" : "No preview open"}
+              disabled={!previewTarget}
             ><PanelIcon /></button>
           </div>
           {agent?.description && descOpen && (
@@ -267,7 +362,7 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
                   {it.content && (
                     it.role === "user"
                       ? <div className="msg-body">{it.content}</div>
-                      : <MessageBody text={it.content} />
+                      : <MessageBody text={it.content} onOpenPreview={openPreview} />
                   )}
                   {it.atts && it.atts.length > 0 && (
                     <div className="msg-attachments">
@@ -293,6 +388,13 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
                 </div>
               );
             }
+            if (it.kind === "ask") {
+              return (
+                <div key={i} className="msg">
+                  <AskUserCard item={it} onAnswer={answerAsk} />
+                </div>
+              );
+            }
             if (it.kind === "delegate") {
               return (
                 <div key={i} className="msg">
@@ -311,7 +413,6 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
 
         <div className="chat-input-bar">
           <div className="chat-input-inner">
-            <AttachmentBar attachments={attachments} onChange={setAttachments} disabled={busy} />
             <textarea
               className="input"
               rows={2}
@@ -322,17 +423,58 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
               }}
             />
-            <button className="btn btn-primary" onClick={send} disabled={busy || (!input.trim() && attachments.length === 0)}>Send</button>
+            <button className="btn btn-primary" aria-label="Send message" onClick={send} disabled={busy || (!input.trim() && attachments.length === 0)}>Send</button>
           </div>
           <div className="chat-input-footer">
+            <AttachmentBar attachments={attachments} onChange={setAttachments} disabled={busy} />
             <ModeSelect value={mode} onChange={setMode} showProceed={planReady && !busy} onProceed={proceedPlan} />
-            <ModelSelect value={model} onChange={setModel} defaultLabel="Agent default" title="Model for this chat" style={{ width: 180 }} />
+            <ModelSelect value={model} onChange={setModel} defaultLabel="Agent default" title="Model for this chat" style={{ width: 180, flex: "none", marginLeft: "auto" }} />
+          </div>
+          <div className="chat-input-actions">
+            <div className="chat-input-action-left">
+              <button className="btn btn-sm btn-connector" onClick={() => setConnectorOpen(true)} title="Add or switch connections">🔗 Connector</button>
+              {/* Working directory widget */}
+              <div className="workdir-widget">
+                <span className="workdir-icon">📁</span>
+                {workingDir ? (
+                  <>
+                    <span className="workdir-path" title={workingDir}>{workingDir.split("/").pop() || workingDir}</span>
+                    <button
+                      className="workdir-btn workdir-btn-change"
+                      onClick={pickFolder}
+                      disabled={pickingFolder || busy}
+                      title={`Working dir: ${workingDir} — click to change`}
+                    >{pickingFolder ? "…" : "Change"}</button>
+                    <button
+                      className="workdir-btn workdir-btn-clear"
+                      onClick={clearFolder}
+                      disabled={busy}
+                      title="Remove working directory"
+                      aria-label="Remove working directory"
+                    >✕</button>
+                  </>
+                ) : (
+                  <button
+                    className="workdir-btn workdir-btn-set"
+                    onClick={pickFolder}
+                    disabled={pickingFolder || busy}
+                    title="Set working directory for this agent"
+                  >{pickingFolder ? "Opening…" : "Set folder"}</button>
+                )}
+              </div>
+            </div>
+            <div className="chat-input-action-right">
+              <button className="btn btn-sm btn-ghost-danger" onClick={clearChat} disabled={items.length === 0} title="Clear conversation messages">🧹 Clear</button>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* panel preview */}
-      {showPreview && <PreviewPanel texts={previewTexts} />}
+      {/* panel preview — only shown when user explicitly clicks a link */}
+      <PreviewPanel
+        target={previewTarget}
+        onClose={() => setPreviewTarget(null)}
+      />
 
       <ConnectorModal open={connectorOpen} onClose={() => setConnectorOpen(false)} />
     </div>

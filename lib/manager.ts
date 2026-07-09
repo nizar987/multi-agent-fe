@@ -19,6 +19,7 @@
 import { getDb } from "./db";
 import { callAi } from "./ai";
 import { runAgent, RunEvent, RunOptions } from "./agent-runtime";
+import { Attachment, buildUserContent } from "./attachments";
 import { logger } from "./logger";
 import {
   tasksRepo,
@@ -80,6 +81,23 @@ function scopedAgents(task: ManagerTask): ActiveAgent[] {
   const wanted = new Set(ids);
   const filtered = all.filter((a) => wanted.has(a.id));
   return filtered.length ? filtered : all; // fall back if the team was deleted
+}
+
+/** Attachments uploaded with the task (files/photos), parsed from the JSON column. */
+function taskAttachments(task: ManagerTask): Attachment[] {
+  try {
+    const arr = JSON.parse(task.attachments || "[]");
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+/** One line for the manager's reasoning prompts so it knows files exist. */
+function attachmentNote(task: ManagerTask): string {
+  const atts = taskAttachments(task);
+  if (atts.length === 0) return "";
+  return `\n\nAttached files (each worker agent receives them): ${atts.map((a) => a.name).join(", ")}`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -188,7 +206,7 @@ async function intake(task: ManagerTask): Promise<IntakeDecision> {
     "could pick (different directions/options that would both make sense).";
   const user =
     `Available worker agents:\n${roster}\n\n` +
-    `User request:\n${task.original_request}\n\n` +
+    `User request:\n${task.original_request}${attachmentNote(task)}\n\n` +
     `Clarification so far:\n${clarificationHistory(task.id)}`;
   const decision = await managerDecide<IntakeDecision>(system, user, task.model);
   // Ensure suggestions is always an array
@@ -216,7 +234,7 @@ async function plan(task: ManagerTask): Promise<void> {
     "{\"agent_name\": string, \"subtask_description\": string}. Use exact agent names from the roster.";
   const user =
     `Available worker agents:\n${roster}\n\n` +
-    `User request:\n${task.original_request}\n\n` +
+    `User request:\n${task.original_request}${attachmentNote(task)}\n\n` +
     `Clarification:\n${clarificationHistory(task.id)}` +
     (task.assumptions ? `\n\nAssumptions the manager is proceeding with:\n${task.assumptions}` : "");
 
@@ -268,6 +286,9 @@ async function dispatch(
   // ---- Phase 1: PLAN (first attempt only) ----
   // The agent thinks through its approach with risky actions blocked, so the
   // plan is visible before anything runs for real.
+  // Files/photos uploaded with the task go to every worker as vision/text blocks.
+  const atts = taskAttachments(task);
+
   let planText = "";
   if (a.attempt_count === 0) {
     try {
@@ -276,7 +297,10 @@ async function dispatch(
         [
           {
             role: "user",
-            content: `${prompt}\n\nFirst, produce a short step-by-step PLAN of how you will complete this sub-task. Do NOT execute anything yet — just the plan.`,
+            content: buildUserContent(
+              `${prompt}\n\nFirst, produce a short step-by-step PLAN of how you will complete this sub-task. Do NOT execute anything yet — just the plan.`,
+              atts
+            ),
           },
         ],
         noop,
@@ -299,7 +323,7 @@ async function dispatch(
 
   let result: string;
   try {
-    result = await runAgent(a.agent_id, [{ role: "user", content: actPrompt }], noop, 0, "act", opts);
+    result = await runAgent(a.agent_id, [{ role: "user", content: buildUserContent(actPrompt, atts) }], noop, 0, "act", opts);
   } catch (e: unknown) {
     result = `Agent error: ${e instanceof Error ? e.message : String(e)}`;
   }
@@ -548,11 +572,18 @@ export function startTask(
   originalRequest: string,
   title?: string,
   agentIds: number[] = [],
-  model: string | null = null
+  model: string | null = null,
+  attachments: Attachment[] = []
 ): number {
   const clean = originalRequest.trim();
-  const id = tasksRepo.create((title || clean).slice(0, 80) || "Untitled task", clean, agentIds, model);
-  logger.info(`Manager task created (id=${id}): ${clean.slice(0, 100)}`);
+  const id = tasksRepo.create(
+    (title || clean).slice(0, 80) || "Untitled task",
+    clean,
+    agentIds,
+    model,
+    attachments.length ? JSON.stringify(attachments) : null
+  );
+  logger.info(`Manager task created (id=${id}): ${clean.slice(0, 100)}${attachments.length ? ` [+${attachments.length} attachment(s)]` : ""}`);
   // Fire-and-forget: the route responds immediately; the UI polls for status.
   void runManager(id);
   return id;

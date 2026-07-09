@@ -9,6 +9,7 @@ import { hasSecret } from "@/lib/config";
 import type { AiMessage } from "@/lib/ai";
 import { logger } from "@/lib/logger";
 import { Attachment, buildUserContent, attachmentSummary } from "@/lib/attachments";
+import { describeImagesWithVision } from "@/lib/tools-vision";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +38,12 @@ export async function POST(req: NextRequest) {
   }
 
   const displayContent = attachmentSummary(message, atts);
-  const userContent = buildUserContent(message, atts);
+  if (atts.length > 0) {
+    logger.info(`Chat attachments received: ${atts.map((a) => `${a.name} (${a.kind}/${a.mediaType})`).join(", ")}`);
+  }
+  // Photos are read by the vision model right away; its description is appended
+  // as a text block so the agent's own model can digest it.
+  const userContent = await describeImagesWithVision(buildUserContent(message, atts), message);
   const meta = Array.isArray(userContent) ? JSON.stringify({ contentBlocks: userContent }) : null;
 
   db.prepare("INSERT INTO messages(conversation_id,role,content,meta) VALUES(?,?,?,?)")
@@ -62,7 +68,7 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
       try {
         logger.info(`Chat started: conv=${conversationId}, agent=${conv.agent_id}, mode=${mode}`);
-        const finalText = await runAgent(conv.agent_id, history, send, 0, mode, modelOverride ? { modelOverride } : {});
+        const finalText = await runAgent(conv.agent_id, history, send, 0, mode, { interactive: true, ...(modelOverride ? { modelOverride } : {}) });
         db.prepare("INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)")
           .run(conversationId, "assistant", finalText || "(no answer)");
         send({ type: "done", finalText });

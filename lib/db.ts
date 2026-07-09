@@ -134,7 +134,7 @@ function migrate(d: Database.Database) {
     /* ---------- multi-connection registry (github/gitlab/database/redis/monitoring) ---------- */
     CREATE TABLE IF NOT EXISTS connections (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      kind TEXT NOT NULL CHECK (kind IN ('github','gitlab','database','redis','grafana','prometheus','loki')),
+      kind TEXT NOT NULL CHECK (kind IN ('github','gitlab','database','redis','grafana','prometheus','loki','tavily','ai')),
       name TEXT NOT NULL,
       config TEXT NOT NULL DEFAULT '{}',   -- JSON non-secret fields (host, apiUrl, engine, …)
       is_active INTEGER NOT NULL DEFAULT 0, -- exactly one active per kind
@@ -155,6 +155,16 @@ function migrate(d: Database.Database) {
       PRIMARY KEY (session_id, agent_id)
     );
 
+    /* ---------- approval allowlist ---------- */
+    /* actions the user chose "Always allow" for — they skip the approval card */
+    CREATE TABLE IF NOT EXISTS approval_allowlist (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL,                         -- shell | database | redis | env
+      detail TEXT NOT NULL,                       -- exact command / SQL / detail string
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(kind, detail)
+    );
+
     /* ---------- cron jobs ---------- */
     CREATE TABLE IF NOT EXISTS cron_jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,6 +183,11 @@ function migrate(d: Database.Database) {
   if (!cols.includes("avatar")) d.exec("ALTER TABLE agents ADD COLUMN avatar TEXT DEFAULT '🤖'");
   if (!cols.includes("color")) d.exec("ALTER TABLE agents ADD COLUMN color TEXT DEFAULT '#c15f3c'");
   if (!cols.includes("shell_auto")) d.exec("ALTER TABLE agents ADD COLUMN shell_auto INTEGER DEFAULT 0");
+  // working_dir: per-agent folder override for shell & filesystem tools
+  if (!cols.includes("working_dir")) d.exec("ALTER TABLE agents ADD COLUMN working_dir TEXT DEFAULT NULL");
+  // category: free-form label to group agents (e.g. "coding", "research") so the
+  // workspace can pull in a whole category at once instead of one agent at a time.
+  if (!cols.includes("category")) d.exec("ALTER TABLE agents ADD COLUMN category TEXT DEFAULT ''");
 
   // manager: last_plan column added after the initial manager tables shipped
   const acols = (d.prepare("PRAGMA table_info(task_assignments)").all() as any[]).map((c) => c.name);
@@ -182,19 +197,21 @@ function migrate(d: Database.Database) {
   if (!tcols.includes("agent_ids")) d.exec("ALTER TABLE manager_tasks ADD COLUMN agent_ids TEXT NOT NULL DEFAULT '[]'");
   if (!tcols.includes("model")) d.exec("ALTER TABLE manager_tasks ADD COLUMN model TEXT DEFAULT NULL");
   if (!tcols.includes("clarification_options")) d.exec("ALTER TABLE manager_tasks ADD COLUMN clarification_options TEXT DEFAULT NULL");
+  // attachments (JSON array of {name,kind,mediaType,data}) for file/photo uploads
+  if (!tcols.includes("attachments")) d.exec("ALTER TABLE manager_tasks ADD COLUMN attachments TEXT DEFAULT NULL");
 
   // connections: older DBs have a CHECK that only allows the original four kinds.
   // SQLite cannot alter a CHECK, so rebuild the table once when the monitoring kinds are missing.
   const connSql = String(
     (d.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='connections'").get() as any)?.sql ?? ""
   );
-  if (connSql && !connSql.includes("'grafana'")) {
+  if (connSql && !connSql.includes("'ai'")) {
     d.exec(`
       BEGIN;
       ALTER TABLE connections RENAME TO connections_old;
       CREATE TABLE connections (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        kind TEXT NOT NULL CHECK (kind IN ('github','gitlab','database','redis','grafana','prometheus','loki')),
+        kind TEXT NOT NULL CHECK (kind IN ('github','gitlab','database','redis','grafana','prometheus','loki','tavily','ai')),
         name TEXT NOT NULL,
         config TEXT NOT NULL DEFAULT '{}',
         is_active INTEGER NOT NULL DEFAULT 0,

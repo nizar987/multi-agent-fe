@@ -53,7 +53,7 @@ function connectError(host: string, port: number, error: unknown): string {
 
 /** Database test: connect + a light query, genuinely validates credentials. */
 export async function testDatabase(cfg: AppConfig["database"], password: string | null): Promise<TestResult> {
-  if (cfg.type === "postgres") {
+  if (cfg.type === "postgres" || cfg.type === ("postgresql" as any)) {
     const { Client } = await import("pg");
     const client = new Client({
       host: cfg.host,

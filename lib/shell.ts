@@ -31,23 +31,40 @@ export const shellToolDef: AiTool = {
   },
 };
 
-export function shellCwd(): string {
+/**
+ * Resolve the working directory for a shell command.
+ *
+ * Priority:
+ *  1. Agent's own working_dir (set via the "Open folder" button in AgentForm)
+ *  2. First entry in the global filesystem.allowedDirs
+ *  3. App data dir as a last-resort fallback
+ */
+export function shellCwd(agentId?: number): string {
+  // 1. Per-agent working_dir
+  if (agentId != null) {
+    const { getDb } = require("./db") as typeof import("./db");
+    const row = getDb()
+      .prepare("SELECT working_dir FROM agents WHERE id=?")
+      .get(agentId) as { working_dir: string | null } | undefined;
+    if (row?.working_dir) return row.working_dir;
+  }
+  // 2. Global allowedDirs fallback
   const dirs = getConfig().filesystem.allowedDirs;
   return dirs.length > 0 ? dirs[0] : getDataDir();
 }
 
-export function runShell(command: string): Promise<string> {
-  const cwd = shellCwd();
+export function runShell(command: string, agentId?: number): Promise<string> {
+  const cwd = shellCwd(agentId);
   return new Promise((resolve) => {
     exec(
       command,
-      { cwd, timeout: 30_000, maxBuffer: 1024 * 1024, shell: "/bin/bash" },
+      { cwd, timeout: 300_000, maxBuffer: 1024 * 1024, shell: "/bin/bash" },
       (err, stdout, stderr) => {
         let out = "";
         if (stdout) out += stdout;
         if (stderr) out += (out ? "\n" : "") + "[stderr]\n" + stderr;
         if (err) {
-          if ((err as any).killed) out += `\n[killed: 30 s timeout]`;
+          if ((err as any).killed) out += `\n[killed: 5 min timeout]`;
           else if (typeof (err as any).code === "number") out += `\n[exit code ${(err as any).code}]`;
         }
         out = out.trim() || "(no output)";
@@ -60,28 +77,35 @@ export function runShell(command: string): Promise<string> {
 
 /* ---------------- approval registry ---------------- */
 
-type Pending = { resolve: (approved: boolean) => void; timer: ReturnType<typeof setTimeout> };
+/** The user's decision on an approval card:
+ *  - "always" : run it AND add to the allowlist (skips future approvals)
+ *  - "once"   : run it this time only
+ *  - "deny"   : don't run it
+ */
+export type ApprovalDecision = "always" | "once" | "deny";
+
+type Pending = { resolve: (decision: ApprovalDecision) => void; timer: ReturnType<typeof setTimeout> };
 const pending: Map<string, Pending> =
   (globalThis as any).__shellApprovals ?? new Map();
 (globalThis as any).__shellApprovals = pending;
 
 /** Called by the runtime: waits for the user's decision for this tool_use_id. */
-export function awaitApproval(id: string, timeoutMs = 180_000): Promise<boolean> {
+export function awaitApproval(id: string, timeoutMs = 180_000): Promise<ApprovalDecision> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      resolve(false);
+      resolve("deny");
     }, timeoutMs);
     pending.set(id, { resolve, timer });
   });
 }
 
 /** Called by the approve endpoint: resolves the user's decision. */
-export function resolveApproval(id: string, approved: boolean): boolean {
+export function resolveApproval(id: string, decision: ApprovalDecision): boolean {
   const p = pending.get(id);
   if (!p) return false;
   clearTimeout(p.timer);
   pending.delete(id);
-  p.resolve(approved);
+  p.resolve(decision);
   return true;
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { testAiConnection } from "@/lib/ai";
+import { testAiConnection, detectProvider } from "@/lib/ai";
 import { testDatabase, testGithub, testGitlab, testRedis } from "@/lib/connections";
 import { getConfig, getSecret } from "@/lib/config";
 import { logger } from "@/lib/logger";
@@ -13,10 +13,19 @@ export async function POST(req: NextRequest) {
   if (b.service === "ai") {
     const apiKey = b.apiKey || getSecret("aiApiKey");
     if (!apiKey) return NextResponse.json({ ok: false, message: "API key is not set." });
+    const baseUrl = b.baseUrl || cfg.ai.baseUrl;
+    const rawProvider = b.provider || cfg.ai.provider;
+    // Resolve "auto" to a concrete provider via URL detection so the correct
+    // wire format (OpenAI vs Anthropic vs Gemini) is always used.
+    const provider =
+      rawProvider && rawProvider !== "auto"
+        ? rawProvider
+        : detectProvider(baseUrl);
     const r = await testAiConnection({
-      baseUrl: b.baseUrl || cfg.ai.baseUrl,
+      baseUrl,
       model: b.model || cfg.ai.model,
       apiKey,
+      provider,
     });
     if (r.ok) logger.info(`Connection test passed: AI (${b.model || cfg.ai.model})`);
     else logger.warn(`Connection test failed: AI — ${r.message}`);

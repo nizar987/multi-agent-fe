@@ -48,6 +48,7 @@ export interface ManagerTask {
   original_request: string;
   agent_ids: string; // JSON array of agent ids the manager may assign to ([] = all)
   model: string | null; // forced model for manager + workers (null = each agent's default)
+  attachments: string | null; // JSON array of {name,kind,mediaType,data} uploaded with the request
   status: TaskStatus;
   clarification_question: string | null;
   clarification_options: string | null; // JSON array of 2 suggested answers
@@ -89,12 +90,18 @@ export interface TaskEvent {
 /* -------------------------------------------------------------------------- */
 
 export const tasksRepo = {
-  create(title: string, originalRequest: string, agentIds: number[] = [], model: string | null = null): number {
+  create(
+    title: string,
+    originalRequest: string,
+    agentIds: number[] = [],
+    model: string | null = null,
+    attachments: string | null = null
+  ): number {
     const r = getDb()
       .prepare(
-        "INSERT INTO manager_tasks(title,original_request,agent_ids,model,status) VALUES(?,?,?,?,'planning')"
+        "INSERT INTO manager_tasks(title,original_request,agent_ids,model,status,attachments) VALUES(?,?,?,?,'planning',?)"
       )
-      .run(title, originalRequest, JSON.stringify(agentIds), model);
+      .run(title, originalRequest, JSON.stringify(agentIds), model, attachments);
     return Number(r.lastInsertRowid);
   },
 

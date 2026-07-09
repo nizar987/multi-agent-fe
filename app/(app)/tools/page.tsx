@@ -15,6 +15,8 @@ const TOOL_META: Record<string, { label: string; icon: string; blurb: string }> 
   database: { label: "Database", icon: "🗄", blurb: "SQL queries (Postgres / MySQL)" },
   redis: { label: "Redis", icon: "🧱", blurb: "Key/value cache access" },
   env: { label: "Env", icon: "🔑", blurb: "Reads .env from the working folder" },
+  monitoring: { label: "Monitoring", icon: "📈", blurb: "Grafana / Prometheus / Loki" },
+  vision: { label: "Vision (read_image)", icon: "👁", blurb: "Agents read attached images via a vision model" },
 };
 
 const DOT: Record<ToolState, string> = {
