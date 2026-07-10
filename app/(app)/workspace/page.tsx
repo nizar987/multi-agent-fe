@@ -39,6 +39,7 @@ export default function WorkspacePage() {
   const [active, setActive] = useState<number[]>([]); // agents added to the workspace (ordered)
   const [rounds, setRounds] = useState<Round[]>([]);
   const [working, setWorking] = useState<Set<number>>(new Set());
+  const abortControllers = useRef<Map<number, AbortController>>(new Map());
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [needsKey, setNeedsKey] = useState(false);
@@ -208,7 +209,10 @@ export default function WorkspacePage() {
       if (!text) { setSelReply(null); return; }
       const anchor = sel.anchorNode;
       const el = anchor instanceof Element ? anchor : anchor?.parentElement;
-      if (!el?.closest(".ws-turn-body, .msg-body")) { setSelReply(null); return; }
+      // Show the reply button for any text selected inside the conversation area.
+      // Match the scroll container (not just parallel-mode `.ws-turn-body`) so it
+      // also works for Manager-mode output and the assignment detail view.
+      if (!el?.closest(".chat-scroll")) { setSelReply(null); return; }
       const rect = sel.getRangeAt(0).getBoundingClientRect();
       setSelReply({ x: rect.left + rect.width / 2, y: rect.top, text });
     };
@@ -258,6 +262,42 @@ export default function WorkspacePage() {
       const next = prev.filter((x) => x !== id);
       persistAgents(next, sessionId);
       return next;
+    });
+  };
+
+  /** Cancel a single agent's ongoing SSE stream without removing it from the workspace. */
+  const stopAgent = (id: number) => {
+    const ctrl = abortControllers.current.get(id);
+    if (ctrl) {
+      ctrl.abort();
+      abortControllers.current.delete(id);
+    }
+    setWorking((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    // Mark the agent's last response as done (stopped by user)
+    setRounds((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (!last) return prev;
+      const resp = last.responses[id];
+      if (resp && !resp.done) {
+        next[next.length - 1] = {
+          ...last,
+          responses: {
+            ...last.responses,
+            [id]: {
+              ...resp,
+              done: true,
+              notices: [...resp.notices, "⏹ Stopped by user."],
+            },
+          },
+        };
+      }
+      return next;
+    });
+    // If all agents done, release busy
+    setWorking((prev) => {
+      if (prev.size === 0) setBusy(false);
+      return prev;
     });
   };
 
@@ -328,7 +368,17 @@ export default function WorkspacePage() {
         return next;
       });
 
+    // Create one AbortController per agent
+    const controllers = new Map<number, AbortController>();
+    for (const id of ids) {
+      const ctrl = new AbortController();
+      controllers.set(id, ctrl);
+      abortControllers.current.set(id, ctrl);
+    }
+
     try {
+      // Use a combined signal — aborts if ANY agent is stopped (parallel stream shares one response)
+      // Individual agent stop is handled by marking done in stopAgent; stream continues for others.
       const res = await fetch("/api/workspace/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -340,6 +390,28 @@ export default function WorkspacePage() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+
+      // Parse a single SSE block (between two \n\n separators) following the
+      // SSE spec: a block may contain multiple lines; only "data:" lines carry
+      // payload. Returns null when no parseable JSON is found.
+      const parseSSEBlock = (block: string): any | null => {
+        for (const line of block.split("\n")) {
+          const trimmed = line.trimEnd();
+          if (!trimmed.startsWith("data:")) continue;
+          // "data:" with optional single space after colon (SSE spec §9.2.6)
+          const payload = trimmed.slice(5).replace(/^ /, "").trim();
+          if (!payload || payload === "[DONE]") continue;
+          try {
+            return JSON.parse(payload);
+          } catch (e) {
+            // Log the raw payload so we can diagnose future issues without
+            // crashing the SSE loop; position 237 errors come from here.
+            console.warn("[SSE] JSON parse failed — raw payload:", payload.slice(0, 300), e);
+          }
+        }
+        return null;
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -347,8 +419,8 @@ export default function WorkspacePage() {
         const parts = buf.split("\n\n");
         buf = parts.pop() ?? "";
         for (const part of parts) {
-          if (!part.startsWith("data: ")) continue;
-          const ev = JSON.parse(part.slice(6));
+          const ev = parseSSEBlock(part);
+          if (ev === null) continue;
           const id = ev.agentId as number;
           if (ev.type === "text") patch(id, (r) => ({ ...r, text: ev.text }));
           else if (ev.type === "tool_call") patch(id, (r) => ev.tool === "run_shell" ? r : ({ ...r, tools: [...r.tools, { tool: ev.tool, done: false }] }));
@@ -371,25 +443,44 @@ export default function WorkspacePage() {
           });
           else if (ev.type === "system_notice") patch(id, (r) => ({ ...r, notices: [...r.notices, ev.text] }));
           else if (ev.type === "done") {
-            patch(id, (r) => ({
-              ...r,
-              done: true,
-              // Never end silently: surface empty answers as a notice.
-              notices: r.text.trim() || r.error
-                ? r.notices
-                : [...r.notices, "⚠ The model returned an empty answer — check the Logs page for details."],
-            }));
+            // Skip if already stopped by user
+            setRounds((prev) => {
+              const last = prev[prev.length - 1];
+              if (last?.responses[id]?.done) return prev; // already stopped
+              return prev; // will be patched below
+            });
+            patch(id, (r) => {
+              if (r.done) return r; // already stopped by user
+              return {
+                ...r,
+                done: true,
+                notices: r.text.trim() || r.error
+                  ? r.notices
+                  : [...r.notices, "⚠ The model returned an empty answer — check the Logs page for details."],
+              };
+            });
+            abortControllers.current.delete(id);
             setWorking((prev) => { const n = new Set(prev); n.delete(id); return n; });
           } else if (ev.type === "error") {
-            patch(id, (r) => ({ ...r, done: true, error: ev.message }));
+            patch(id, (r) => r.done ? r : { ...r, done: true, error: ev.message });
+            abortControllers.current.delete(id);
             setWorking((prev) => { const n = new Set(prev); n.delete(id); return n; });
           }
         }
       }
       if (runMode === "plan") setPlanReady(true);
     } catch (e: any) {
-      for (const id of ids) patch(id, (r) => r.done ? r : { ...r, done: true, error: e.message });
+      // AbortError = user stopped, not a real error
+      if ((e as Error).name !== "AbortError") {
+        for (const id of ids) patch(id, (r) => r.done ? r : { ...r, done: true, error: e.message });
+      }
     } finally {
+      for (const id of ids) abortControllers.current.delete(id);
+      // Only release busy if all agents are done
+      setWorking((prev) => {
+        if (prev.size === 0) setBusy(false);
+        return prev;
+      });
       setBusy(false);
       setWorking(new Set());
     }
@@ -586,13 +677,34 @@ export default function WorkspacePage() {
             const a = agentById(id);
             const isWorking = working.has(id);
             return (
-              <span key={id} className={`ws-chip selected${isWorking ? " working" : ""}`} title={a?.description}>
-                <AgentAvatar avatar={a?.avatar} color={a?.color} size={22} working={isWorking} />
-                {a?.name ?? `Agent #${id}`}
-                {isWorking
-                  ? <span className="dot dot-blue pulse-dot" />
-                  : <button className="ws-chip-x" onClick={() => !busy && removeAgent(id)} title="Remove from workspace">×</button>}
-              </span>
+              <div key={id} className="ws-chip-wrapper">
+                {/* working bubble shown above the chip */}
+                {isWorking && (
+                  <div className="ws-chip-bubble">
+                    <span className="dot dot-blue pulse-dot" style={{ width: 6, height: 6 }} />
+                    working…
+                  </div>
+                )}
+                <span className={`ws-chip selected${isWorking ? " working" : ""}`} title={a?.description}>
+                  <AgentAvatar avatar={a?.avatar} color={a?.color} size={22} working={isWorking} />
+                  {a?.name ?? `Agent #${id}`}
+                  {isWorking ? (
+                    <button
+                      className="ws-chip-stop"
+                      onClick={() => stopAgent(id)}
+                      title={`Stop ${a?.name ?? "agent"}`}
+                      aria-label={`Stop ${a?.name ?? "agent"}`}
+                    >⏹</button>
+                  ) : (
+                    <button
+                      className="ws-chip-x"
+                      onClick={() => !busy && removeAgent(id)}
+                      title="Remove from workspace"
+                      aria-label={`Remove ${a?.name ?? "agent"} from workspace`}
+                    >×</button>
+                  )}
+                </span>
+              </div>
             );
           })}
 

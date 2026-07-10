@@ -35,6 +35,8 @@ export type AppConfig = {
   };
   redis: { host: string; port: number; username: string; db: number; tls: boolean };
   filesystem: { allowedDirs: string[] };
+  /** Optional cap on how much conversation context is sent to the model. */
+  context: { limitEnabled: boolean; maxTokens: number };
   backupDir: string;
   ui: { theme: "system" | "light" | "dark" };
   onboardingDone: boolean;
@@ -48,6 +50,7 @@ const DEFAULTS: AppConfig = {
   database: { type: "postgres", host: "localhost", port: 5432, user: "postgres", database: "postgres", ssl: false },
   redis: { host: "localhost", port: 6379, username: "", db: 0, tls: false },
   filesystem: { allowedDirs: [] },
+  context: { limitEnabled: false, maxTokens: 100000 },
   backupDir: "",
   ui: { theme: "system" },
   onboardingDone: false,
@@ -71,6 +74,7 @@ export function getConfig(): AppConfig {
       database: { ...DEFAULTS.database, ...raw.database },
       redis: { ...DEFAULTS.redis, ...raw.redis },
       filesystem: { ...DEFAULTS.filesystem, ...raw.filesystem },
+      context: { ...DEFAULTS.context, ...raw.context },
       ui: { ...DEFAULTS.ui, ...raw.ui },
     };
   } catch {
@@ -87,6 +91,7 @@ export function updateConfig(patch: Partial<AppConfig>): AppConfig {
     database: { ...getConfig().database, ...(patch.database ?? {}) },
     redis: { ...getConfig().redis, ...(patch.redis ?? {}) },
     filesystem: { ...getConfig().filesystem, ...(patch.filesystem ?? {}) },
+    context: { ...getConfig().context, ...(patch.context ?? {}) },
     ui: { ...getConfig().ui, ...(patch.ui ?? {}) },
   };
   fs.writeFileSync(configFile(), JSON.stringify(merged, null, 2));

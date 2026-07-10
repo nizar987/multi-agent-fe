@@ -4,6 +4,7 @@
  */
 import { getDb } from "./db";
 import { callAiStream, AiTool, AiMessage } from "./ai";
+import { applyContextLimit } from "./context-limit";
 import { listMcpTools, callMcpTool, McpServerName } from "./mcp";
 import { githubToolDefs, callGithubTool } from "./tools-github";
 import { tavilyToolDefs, callTavilyTool } from "./tools-tavily";
@@ -76,6 +77,8 @@ export interface RunOptions {
    * (cron / manager workers) leave this off so nothing blocks on user input.
    */
   interactive?: boolean;
+  /** Label recorded with token usage for this run (defaults to "agent"). */
+  usageSource?: string;
 }
 const PLAN_MSG =
   "Plan mode is active — the action was NOT executed. Explain to the user the plan/actions you intend to take; " +
@@ -398,11 +401,18 @@ export async function runAgent(
 
   let iter = 0;
   for (; iter < MAX_LOOP_ITERATIONS; iter++) {
+    // Optional context cap: drop the oldest turns when the history grows past
+    // the configured token budget (Settings → Context limit).
+    const { messages: sendMessages, trimmed } = applyContextLimit(system, messages);
+    if (trimmed > 0) {
+      onEvent({ type: "system_notice", text: `Context limit: trimmed ${trimmed} older message(s) to stay under the token budget.` });
+    }
     const resp = await callAiStream({
       system,
-      messages,
+      messages: sendMessages,
       tools: defs,
       model: opts.modelOverride ?? agent.model_override ?? undefined,
+      usageSource: opts.usageSource ?? "agent",
       // stream partial text to the chatbox as the AI generates it
       onText: (t) => onEvent({ type: "text", text: t }),
     });
