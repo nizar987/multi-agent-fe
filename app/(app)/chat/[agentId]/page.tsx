@@ -145,6 +145,27 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
       let buf = "";
       let assistantIdx = -1;
 
+      // Parse a single SSE block (between two \n\n separators) following the
+      // SSE spec: a block may contain multiple lines; only "data:" lines carry
+      // payload. Returns null when no parseable JSON is found.
+      const parseSSEBlock = (block: string): any | null => {
+        for (const line of block.split("\n")) {
+          const trimmed = line.trimEnd();
+          if (!trimmed.startsWith("data:")) continue;
+          // "data:" with optional single space after colon (SSE spec §9.2.6)
+          const payload = trimmed.slice(5).replace(/^ /, "").trim();
+          if (!payload || payload === "[DONE]") continue;
+          try {
+            return JSON.parse(payload);
+          } catch (e) {
+            // Log the raw payload so we can diagnose future issues without
+            // crashing the SSE loop; position 237 errors come from here.
+            console.warn("[SSE] JSON parse failed — raw payload:", payload.slice(0, 300), e);
+          }
+        }
+        return null;
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -152,8 +173,8 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
         const parts = buf.split("\n\n");
         buf = parts.pop() ?? "";
         for (const part of parts) {
-          if (!part.startsWith("data: ")) continue;
-          const ev = JSON.parse(part.slice(6));
+          const ev = parseSSEBlock(part);
+          if (ev === null) continue;
           setItems((prev) => {
             const next = [...prev];
             if (ev.type === "text") {

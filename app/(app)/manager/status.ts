@@ -1,3 +1,22 @@
+/** Human-readable label for a task event type. */
+export function eventLabel(type: string): string {
+  switch (type) {
+    case "clarification_asked":     return "❓ Clarification asked";
+    case "clarification_answered":  return "💬 Clarification answered";
+    case "assigned":                return "📋 Assigned";
+    case "dispatched":              return "🚀 Dispatched";
+    case "submitted":               return "📤 Submitted";
+    case "completion_check_failed": return "🔄 Not complete yet";
+    case "review_passed":           return "✅ Review passed";
+    case "review_failed":           return "❌ Review failed";
+    case "revision_requested":      return "✏️ Revision requested";
+    case "assignment_approved":     return "🎉 Approved";
+    case "task_completed":          return "✅ Task completed";
+    case "task_failed":             return "💥 Task failed";
+    default:                        return type;
+  }
+}
+
 /** Shared status → badge mapping for the manager UI. */
 export function statusBadge(status: string): { label: string; cls: string } {
   switch (status) {

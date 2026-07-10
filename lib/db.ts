@@ -176,6 +176,18 @@ function migrate(d: Database.Database) {
       last_run TEXT DEFAULT NULL,                 -- timestamp of last execution
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    /* ---------- token usage log ---------- */
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL DEFAULT (datetime('now')),
+      provider TEXT NOT NULL DEFAULT '',          -- anthropic | openai | gemini
+      model TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'other',       -- agent | workspace | manager | vision | test | other
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_token_usage_at ON token_usage(at);
   `);
 
   // light migrations for older DBs: agent avatar + color
@@ -192,6 +204,9 @@ function migrate(d: Database.Database) {
   // manager: last_plan column added after the initial manager tables shipped
   const acols = (d.prepare("PRAGMA table_info(task_assignments)").all() as any[]).map((c) => c.name);
   if (!acols.includes("last_plan")) d.exec("ALTER TABLE task_assignments ADD COLUMN last_plan TEXT DEFAULT NULL");
+  // conversation_id: per-assignment conversation so worker agents have persistent
+  // history across retry attempts and revisions within the same assignment.
+  if (!acols.includes("conversation_id")) d.exec("ALTER TABLE task_assignments ADD COLUMN conversation_id INTEGER DEFAULT NULL");
 
   const tcols = (d.prepare("PRAGMA table_info(manager_tasks)").all() as any[]).map((c) => c.name);
   if (!tcols.includes("agent_ids")) d.exec("ALTER TABLE manager_tasks ADD COLUMN agent_ids TEXT NOT NULL DEFAULT '[]'");

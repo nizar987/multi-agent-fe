@@ -13,6 +13,7 @@ import { getConfig, getSecret, getConnectionSecret } from "./config";
 import { getModelRoute } from "./model-routes";
 import { hasDocumentBlock } from "./attachments";
 import { logger } from "./logger";
+import { recordUsage } from "./usage-db";
 import { AI_PROVIDER_PRESETS } from "./ai-provider-presets";
 
 export type AiMessage = { role: "user" | "assistant"; content: any };
@@ -273,6 +274,41 @@ interface CallOpts {
   apiKeyOverride?: string;
   baseUrlOverride?: string;
   providerOverride?: AiProvider;
+  /** Label recorded with token usage (agent | workspace | manager | vision | test). */
+  usageSource?: string;
+}
+
+export interface TokenUsage { input_tokens: number; output_tokens: number }
+
+/** Pull token counts out of a provider's raw JSON response (best-effort). */
+function extractUsage(provider: AiProvider, json: any): TokenUsage {
+  if (!json || typeof json !== "object") return { input_tokens: 0, output_tokens: 0 };
+  if (provider === "openai") {
+    const u = json.usage ?? {};
+    return { input_tokens: Number(u.prompt_tokens) || 0, output_tokens: Number(u.completion_tokens) || 0 };
+  }
+  if (provider === "gemini") {
+    const u = json.usageMetadata ?? {};
+    return {
+      input_tokens: Number(u.promptTokenCount) || 0,
+      output_tokens: Number(u.candidatesTokenCount) || 0,
+    };
+  }
+  // anthropic
+  const u = json.usage ?? {};
+  return { input_tokens: Number(u.input_tokens) || 0, output_tokens: Number(u.output_tokens) || 0 };
+}
+
+/** Write a usage record for one completed call. Best-effort; never throws. */
+function logUsage(req: { provider: AiProvider; model: string }, usage: TokenUsage | undefined, source?: string): void {
+  if (!usage) return;
+  recordUsage({
+    provider: req.provider,
+    model: req.model,
+    source: source || "other",
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+  });
 }
 
 function resolveSettings(opts: CallOpts) {
@@ -327,7 +363,8 @@ function buildRequest(opts: CallOpts, stream: boolean) {
         max_tokens: Math.min(maxTokens, 16384),
         messages: toOpenAiMessages(opts.system, opts.messages),
         ...(toOpenAiTools(opts.tools) ? { tools: toOpenAiTools(opts.tools) } : {}),
-        ...(stream ? { stream: true } : {}),
+        // Ask for a final usage chunk so token counts are captured while streaming.
+        ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
       },
     };
   }
@@ -437,7 +474,9 @@ export async function callAi(opts: CallOpts): Promise<any> {
     const detail = await res.text().catch(() => "");
     throw new Error(humanizeAiError(res.status, detail, req.baseUrl, req.model));
   }
-  return normalize(req.provider, await res.json());
+  const json = await res.json();
+  logUsage(req, extractUsage(req.provider, json), opts.usageSource);
+  return normalize(req.provider, json);
 }
 
 /* ------------------------------------------------------------------ */
@@ -467,16 +506,21 @@ export async function callAiStream(opts: CallOpts & { onText?: (fullText: string
   // Some gateways ignore `stream` and reply with plain JSON — handle both.
   const ctype = res.headers.get("content-type") ?? "";
   if (!ctype.includes("event-stream")) {
-    const normalized = normalize(req.provider, await res.json());
+    const json = await res.json();
+    logUsage(req, extractUsage(req.provider, json), opts.usageSource);
+    const normalized = normalize(req.provider, json);
     const t = (normalized.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
     if (t && opts.onText) opts.onText(t);
     return normalized;
   }
 
   const events = sseEvents(res.body!);
-  if (req.provider === "openai") return streamOpenAi(events, opts.onText);
-  if (req.provider === "gemini") return streamGemini(events, opts.onText);
-  return streamAnthropic(events, opts.onText, req.baseUrl, req.model);
+  const result =
+    req.provider === "openai" ? await streamOpenAi(events, opts.onText)
+    : req.provider === "gemini" ? await streamGemini(events, opts.onText)
+    : await streamAnthropic(events, opts.onText, req.baseUrl, req.model);
+  logUsage(req, result.usage, opts.usageSource);
+  return result;
 }
 
 /** Async iterator over `data:` payloads of an SSE byte stream. */
@@ -504,6 +548,7 @@ async function streamAnthropic(events: AsyncGenerator<any>, onText?: (t: string)
   const content: any[] = [];
   const partialJson: Record<number, string> = {};
   let stopReason: string | null = null;
+  const usage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
 
   const emitText = () => {
     if (!onText) return;
@@ -512,7 +557,13 @@ async function streamAnthropic(events: AsyncGenerator<any>, onText?: (t: string)
   };
 
   for await (const ev of events) {
-    if (ev.type === "content_block_start") {
+    if (ev.type === "message_start") {
+      const u = ev.message?.usage;
+      if (u) {
+        usage.input_tokens = Number(u.input_tokens) || 0;
+        usage.output_tokens = Number(u.output_tokens) || 0;
+      }
+    } else if (ev.type === "content_block_start") {
       content[ev.index] = { ...ev.content_block };
       if (ev.content_block?.type === "tool_use") {
         content[ev.index].input = ev.content_block.input ?? {};
@@ -534,20 +585,29 @@ async function streamAnthropic(events: AsyncGenerator<any>, onText?: (t: string)
       }
     } else if (ev.type === "message_delta") {
       if (ev.delta?.stop_reason) stopReason = ev.delta.stop_reason;
+      // Anthropic reports the running output token count on message_delta.
+      if (ev.usage?.output_tokens) usage.output_tokens = Number(ev.usage.output_tokens) || usage.output_tokens;
     } else if (ev.type === "error") {
       throw new Error(humanizeAiError(null, ev.error?.message ?? "stream error", baseUrl, model));
     }
   }
-  return { content: content.filter(Boolean), stop_reason: stopReason };
+  return { content: content.filter(Boolean), stop_reason: stopReason, usage };
 }
 
 async function streamOpenAi(events: AsyncGenerator<any>, onText?: (t: string) => void): Promise<any> {
   let text = "";
   let reasoning = "";
   let finish: string | null = null;
+  const usage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
   const toolAcc: Record<number, { id: string; name: string; args: string }> = {};
 
   for await (const ev of events) {
+    // With stream_options.include_usage the final chunk carries usage and an
+    // empty choices array — capture it before the `!choice` skip below.
+    if (ev.usage) {
+      usage.input_tokens = Number(ev.usage.prompt_tokens) || usage.input_tokens;
+      usage.output_tokens = Number(ev.usage.completion_tokens) || usage.output_tokens;
+    }
     const choice = ev.choices?.[0];
     if (!choice) continue;
     if (choice.finish_reason) finish = choice.finish_reason;
@@ -587,14 +647,19 @@ async function streamOpenAi(events: AsyncGenerator<any>, onText?: (t: string) =>
     });
   }
   const hasTool = content.some((c) => c.type === "tool_use");
-  return { content, stop_reason: finish === "tool_calls" || hasTool ? "tool_use" : "end_turn" };
+  return { content, stop_reason: finish === "tool_calls" || hasTool ? "tool_use" : "end_turn", usage };
 }
 
 async function streamGemini(events: AsyncGenerator<any>, onText?: (t: string) => void): Promise<any> {
   let text = "";
   const calls: { name: string; args: any }[] = [];
+  const usage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
 
   for await (const ev of events) {
+    if (ev.usageMetadata) {
+      usage.input_tokens = Number(ev.usageMetadata.promptTokenCount) || usage.input_tokens;
+      usage.output_tokens = Number(ev.usageMetadata.candidatesTokenCount) || usage.output_tokens;
+    }
     const parts = ev.candidates?.[0]?.content?.parts ?? [];
     for (const p of parts) {
       if (typeof p.text === "string" && p.text) {
@@ -611,7 +676,7 @@ async function streamGemini(events: AsyncGenerator<any>, onText?: (t: string) =>
   calls.forEach((c, i) =>
     content.push({ type: "tool_use", id: `gem_${c.name}_${i}_${Date.now()}`, name: c.name, input: c.args })
   );
-  return { content, stop_reason: content.some((c) => c.type === "tool_use") ? "tool_use" : "end_turn" };
+  return { content, stop_reason: content.some((c) => c.type === "tool_use") ? "tool_use" : "end_turn", usage };
 }
 
 /* ------------------------------------------------------------------ */
@@ -685,6 +750,7 @@ export async function testAiVision(params: {
         ],
       }],
       maxTokens: 50,
+      usageSource: "test",
       apiKeyOverride: params.apiKey,
       baseUrlOverride: params.baseUrl,
       model: params.model,
@@ -715,6 +781,7 @@ export async function testAiConnection(params: {
     await callAi({
       messages: [{ role: "user", content: "ping" }],
       maxTokens: 8,
+      usageSource: "test",
       apiKeyOverride: params.apiKey,
       baseUrlOverride: params.baseUrl,
       model: params.model,

@@ -11,6 +11,7 @@ const NAV = [
   { href: "/skills", label: "Skills", icon: "✦" },
   { href: "/knowledge", label: "Knowledge", icon: "📚" },
   { href: "/memory", label: "Memory", icon: "▤" },
+  { href: "/usage", label: "Usage", icon: "📊" },
   { href: "/logs", label: "Logs", icon: "📋" },
   { href: "/monitoring", label: "Monitoring", icon: "📈" },
   { href: "/tools", label: "Tools", icon: "🛠" },

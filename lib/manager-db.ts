@@ -72,6 +72,7 @@ export interface TaskAssignment {
   last_plan: string | null;
   last_result: string | null;
   last_review_notes: string | null;
+  conversation_id: number | null;  // persisted conversation for history across attempts
   created_at: string;
   updated_at: string;
 }
@@ -131,6 +132,34 @@ export const tasksRepo = {
 /* -------------------------------------------------------------------------- */
 /* assignmentsRepo                                                             */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Get or create the shared conversation for a manager task.
+ * All assignments within the same task write into this single conversation
+ * so every worker agent has the full history of what prior agents produced.
+ *
+ * The conversation is keyed by title only (not agent_id) so agents with
+ * different agent_ids can all share the same thread. We use agent_id=0 as
+ * a sentinel for manager-owned conversations that don't belong to one agent.
+ */
+export function getOrCreateTaskConversation(taskId: number): number {
+  const db = getDb();
+  const title = `__manager_task_${taskId}__`;
+  // Re-use existing conversation tied to this task if one already exists.
+  const existing = db
+    .prepare("SELECT id FROM conversations WHERE title=? LIMIT 1")
+    .get(title) as any;
+  if (existing) return existing.id as number;
+  // Use agent_id=0 as a sentinel — manager conversations are not owned by
+  // any single agent. The FK reference agents(id) requires the row to exist,
+  // so we fall back to the first available agent id if 0 is not valid.
+  const firstAgent = db.prepare("SELECT id FROM agents ORDER BY id LIMIT 1").get() as any;
+  const agentId = firstAgent?.id ?? 1;
+  const r = db
+    .prepare("INSERT INTO conversations(agent_id,title) VALUES(?,?)")
+    .run(agentId, title);
+  return Number(r.lastInsertRowid);
+}
 
 export const assignmentsRepo = {
   create(input: {

@@ -861,6 +861,28 @@ select.chat-conv-select {
 }
 .message-body tr:nth-child(even) td { background: var(--bg-muted); }
 
+/* ============ usage table ============ */
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 8px;
+}
+.usage-table th, .usage-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+.usage-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.usage-table tbody tr:hover td { background: var(--bg-muted); }
+
 /* ============ chart block ============ */
 .chart-block {
   background: var(--bg-muted);
@@ -1737,6 +1759,69 @@ select.chat-conv-select {
 }
 .ws-chip-x:hover { background: var(--danger-soft); color: var(--danger); }
 
+/* wrapper for chip + working bubble above it */
+.ws-chip-wrapper {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+/* speech bubble shown above the chip when agent is working */
+.ws-chip-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: var(--info);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 999px;
+  white-space: nowrap;
+  animation: bubble-in 180ms ease;
+  /* tail pointing down */
+  position: relative;
+}
+.ws-chip-bubble::after {
+  content: "";
+  position: absolute;
+  bottom: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--info);
+  border-bottom: 0;
+}
+@keyframes bubble-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.92); }
+  to   { opacity: 1; transform: translateY(0)  scale(1); }
+}
+
+/* stop button inside chip — replaces × while working */
+.ws-chip-stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 2px;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+.ws-chip-stop:hover {
+  background: var(--danger-soft);
+  transform: scale(1.15);
+}
+
 /* add button + dropdown picker */
 .ws-picker { position: relative; }
 
@@ -2412,4 +2497,173 @@ select.chat-conv-select {
   font-size: 10px;
   opacity: 0.65;
   flex-shrink: 0;
+}
+
+/* ============ manager task event list ============ */
+
+.task-event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.task-event-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  line-height: 1.5;
+  animation: fade-in 180ms ease-out;
+}
+
+.task-event-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.task-event-label {
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.task-event-content {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.task-event-time {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+/* ============ AssignmentDetail — inline expandable agent detail ============ */
+
+.assignment-detail {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.assignment-detail-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  transition: color 120ms ease, background 120ms ease;
+}
+.assignment-detail-toggle:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.assignment-detail-chevron {
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+.assignment-detail-label {
+  font-weight: 500;
+}
+
+.assignment-detail-body {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.assignment-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.assignment-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+
+.assignment-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin: 0;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+/* event log */
+.assignment-event-log {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.assignment-event {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  flex-wrap: wrap;
+}
+
+.assignment-event-type {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.assignment-event-content {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assignment-event-time {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }

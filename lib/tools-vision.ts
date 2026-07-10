@@ -72,6 +72,7 @@ export async function describeImagesWithVision(
       const resp = await callAi({
         model: visionModel,
         maxTokens: 4000,
+        usageSource: "vision",
         messages: [{ role: "user", content: [b, { type: "text", text: prompt }] as any }],
       });
       const text = (resp?.content ?? [])
@@ -127,6 +128,7 @@ export async function callVisionTool(history: AiMessage[], input: unknown): Prom
   const resp = await callAi({
     model: visionModel,
     maxTokens: 4000,
+    usageSource: "vision",
     // image first, then the question — matches the payload order NIM expects
     messages: [{ role: "user", content: [images[idx], { type: "text", text: question }] }],
   });

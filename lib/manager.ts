@@ -18,6 +18,7 @@
  */
 import { getDb } from "./db";
 import { callAi } from "./ai";
+import type { AiMessage } from "./ai";
 import { runAgent, RunEvent, RunOptions } from "./agent-runtime";
 import { Attachment, buildUserContent } from "./attachments";
 import { logger } from "./logger";
@@ -25,6 +26,7 @@ import {
   tasksRepo,
   assignmentsRepo,
   taskEventsRepo,
+  getOrCreateTaskConversation,
   ManagerTask,
   TaskAssignment,
 } from "./manager-db";
@@ -152,6 +154,7 @@ async function managerDecide<T>(system: string, user: string, model?: string | n
         "The JSON must be on its own line. Never refuse or reply with natural language.",
       messages: [{ role: "user", content: user }],
       maxTokens: 15000,
+      usageSource: "manager",
       model: model ?? undefined,
     });
     const text = extractText(resp);
@@ -269,6 +272,34 @@ async function plan(task: ManagerTask): Promise<void> {
 /* Node: dispatch — run the worker agent                                       */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Load full conversation history from the shared task conversation.
+ * All assignments in the same task share one conversation so agent B can
+ * read what agent A produced, and revisions have the full prior context.
+ */
+function rowToAiMessage(m: { role: string; content: string; meta: string | null }): AiMessage {
+  if (m.meta) {
+    try {
+      const parsed = JSON.parse(m.meta);
+      if (parsed?.contentBlocks) return { role: m.role as any, content: parsed.contentBlocks };
+    } catch { /* fallback to text */ }
+  }
+  return { role: m.role as any, content: m.content };
+}
+
+function loadTaskHistory(convId: number): AiMessage[] {
+  return (getDb()
+    .prepare("SELECT role, content, meta FROM messages WHERE conversation_id=? AND role IN ('user','assistant') ORDER BY id")
+    .all(convId) as any[])
+    .map(rowToAiMessage);
+}
+
+function persistMessage(convId: number, role: "user" | "assistant", content: string, meta?: string | null): void {
+  getDb()
+    .prepare("INSERT INTO messages(conversation_id,role,content,meta) VALUES(?,?,?,?)")
+    .run(convId, role, content, meta ?? null);
+}
+
 async function dispatch(
   task: ManagerTask,
   a: TaskAssignment,
@@ -283,12 +314,22 @@ async function dispatch(
 
   assignmentsRepo.update(a.id, { status: "in_progress" });
 
-  // ---- Phase 1: PLAN (first attempt only) ----
-  // The agent thinks through its approach with risky actions blocked, so the
-  // plan is visible before anything runs for real.
   // Files/photos uploaded with the task go to every worker as vision/text blocks.
   const atts = taskAttachments(task);
 
+  // Get or create the shared conversation for this task. All assignments in
+  // the same task share one conversation so the full history is visible to
+  // every worker agent (agent B can read agent A's output, revisions have
+  // prior attempt context, etc.).
+  const convId = getOrCreateTaskConversation(task.id);
+  // Store the conversation_id on the assignment row for reference.
+  if (!a.conversation_id) {
+    assignmentsRepo.update(a.id, { conversation_id: convId });
+  }
+
+  // ---- Phase 1: PLAN (first attempt only) ----
+  // The agent thinks through its approach with risky actions blocked.
+  // Plan runs without history injection so it stays focused on just the plan.
   let planText = "";
   if (a.attempt_count === 0) {
     try {
@@ -316,17 +357,39 @@ async function dispatch(
   }
 
   // ---- Phase 2: ACT (execute for real) ----
+  // Load full shared conversation history so the agent has context of
+  // everything that happened in this task before this attempt.
+  const history = loadTaskHistory(convId);
+
   const actPrompt = planText
     ? `${prompt}\n\nHere is the plan you drafted:\n${planText}\n\nNow carry it out fully and report the result.`
     : prompt;
+
+  // Persist the user prompt turn before running so history is complete.
+  const userMsgContent = buildUserContent(actPrompt, atts);
+  const userMeta = Array.isArray(userMsgContent)
+    ? JSON.stringify({ contentBlocks: userMsgContent })
+    : null;
+  const userMsgText = typeof userMsgContent === "string" ? userMsgContent : actPrompt;
+  persistMessage(convId, "user", userMsgText, userMeta);
+
   taskEventsRepo.logEvent(task.id, "dispatched", `executing (attempt ${a.attempt_count + 1})`, a.id);
+
+  // Build the full message list: prior history + current user prompt.
+  const actMessages: AiMessage[] = [
+    ...history,
+    { role: "user", content: userMsgContent },
+  ];
 
   let result: string;
   try {
-    result = await runAgent(a.agent_id, [{ role: "user", content: buildUserContent(actPrompt, atts) }], noop, 0, "act", opts);
+    result = await runAgent(a.agent_id, actMessages, noop, 0, "act", opts);
   } catch (e: unknown) {
     result = `Agent error: ${e instanceof Error ? e.message : String(e)}`;
   }
+
+  // Persist the assistant result to the shared conversation.
+  persistMessage(convId, "assistant", result || "(no answer)");
 
   assignmentsRepo.update(a.id, {
     status: "submitted",
