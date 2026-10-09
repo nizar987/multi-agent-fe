@@ -7,6 +7,7 @@ import type { Pool as PgPool } from "pg";
 import type { Pool as MysqlPool } from "mysql2/promise";
 import type { Redis } from "ioredis";
 import { configEvents, getConfig, getSecret } from "./config";
+import { logger } from "./logger";
 
 let pgPool: PgPool | null = null;
 let mysqlPool: MysqlPool | null = null;
@@ -80,6 +81,14 @@ export async function getRedis(): Promise<Redis> {
     db: cfg.db,
     tls: cfg.tls ? {} : undefined,
     maxRetriesPerRequest: 2,
+  });
+  // Without a listener ioredis prints "Unhandled error event" on every
+  // reconnect attempt while Redis is down. Commands still reject normally.
+  let lastLogged = 0;
+  redisClient.on("error", (e: Error) => {
+    if (Date.now() - lastLogged < 60_000) return;
+    lastLogged = Date.now();
+    logger.warn(`Redis connection error (${cfg.host}:${cfg.port}): ${e.message}`);
   });
   return redisClient;
 }

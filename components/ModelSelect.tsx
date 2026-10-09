@@ -8,8 +8,6 @@ interface ModelGroup {
   name: string;
   active: boolean;
   models: string[];
-  /** Vision-only connection (e.g. NVIDIA NIM) — hidden from the regular dropdown. */
-  hidden?: boolean;
 }
 
 let modelsCache: { flat: string[]; groups: ModelGroup[] } | null = null;
@@ -21,7 +19,7 @@ interface ModelSelectProps {
   allowDefault?: boolean;
   /** Label for the default option. */
   defaultLabel?: string;
-  /** Also list models from hidden (vision-only) connections. Default false. */
+  /** @deprecated All saved AI connections are now listed automatically. */
   includeHidden?: boolean;
   title?: string;
   style?: CSSProperties;
@@ -30,20 +28,26 @@ interface ModelSelectProps {
 /**
  * Model picker fed by /api/models — aggregates ALL saved AI connections,
  * grouped per provider. Any listed model works: the backend routes the call
- * to the connection that serves it. Vision-only connections (NVIDIA NIM) are
- * hidden unless `includeHidden` is set (used by the vision-model picker).
+ * to the connection that serves it.
  */
 export default function ModelSelect({
   value,
   onChange,
   allowDefault = true,
   defaultLabel = "Default model",
-  includeHidden = false,
+  includeHidden: _includeHidden,
   title,
   style,
 }: ModelSelectProps) {
+  const [refresh, setRefresh] = useState(0);
   const [flat, setFlat] = useState<string[]>(modelsCache?.flat ?? FALLBACK);
   const [allGroups, setAllGroups] = useState<ModelGroup[]>(modelsCache?.groups ?? []);
+
+  useEffect(() => {
+    const clear = () => { modelsCache = null; setRefresh(v => v + 1); };
+    window.addEventListener("settings-changed", clear);
+    return () => window.removeEventListener("settings-changed", clear);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -59,9 +63,9 @@ export default function ModelSelect({
       })
       .catch(() => setFlat(FALLBACK));
     return () => { alive = false; };
-  }, []);
+  }, [refresh]);
 
-  const groups = includeHidden ? allGroups : allGroups.filter((g) => !g.hidden);
+  const groups = allGroups;
   const grouped = groups.length > 0;
   const known = grouped ? groups.flatMap((g) => g.models) : flat;
   const customValue = value && !known.includes(value) ? value : null;

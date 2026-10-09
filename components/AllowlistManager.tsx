@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 
-type Kind = "shell" | "database" | "redis" | "env";
+type Kind = "shell" | "database" | "redis" | "env" | "learning";
 
 interface Entry {
   id: number;
@@ -15,6 +15,7 @@ const KIND_LABELS: Record<Kind, string> = {
   database: "🗄 SQL",
   redis: "⚡ Redis",
   env: "🔑 .env",
+  learning: "🧠 Knowledge/skill",
 };
 
 /** Manage "Always allow" approval entries — actions here run without asking. */
@@ -73,6 +74,7 @@ export default function AllowlistManager() {
           <option value="database">SQL</option>
           <option value="redis">Redis</option>
           <option value="env">.env read</option>
+          <option value="learning">Knowledge/skill edit</option>
         </select>
         <input
           className="input mono"

@@ -6,9 +6,23 @@ export default function KnowledgePage() {
   const [agents, setAgents] = useState<any[]>([]);
   const [editing, setEditing] = useState<any | null>(null);
 
+  const [error, setError] = useState<string | null>(null);
+
+  const loadJson = async (url: string): Promise<any[]> => {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`${url} responded ${r.status}`);
+    const data = await r.json();
+    return Array.isArray(data) ? data : [];
+  };
+
   const load = () => {
-    fetch("/api/knowledge").then((r) => r.json()).then(setItems);
-    fetch("/api/agents").then((r) => r.json()).then(setAgents);
+    setError(null);
+    Promise.all([loadJson("/api/knowledge"), loadJson("/api/agents")])
+      .then(([k, a]) => {
+        setItems(k);
+        setAgents(a);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"));
   };
   useEffect(load, []);
 
@@ -43,6 +57,16 @@ export default function KnowledgePage() {
         Trusted context injected into the system prompt — for <strong>all agents</strong> (global) or one specific agent.
       </p>
 
+      {error && (
+        <div className="card mb-4" style={{ borderColor: "var(--danger, #dc2626)" }}>
+          <strong>Couldn't load knowledge.</strong>
+          <div className="muted small">{error}</div>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn" onClick={load}>Retry</button>
+          </div>
+        </div>
+      )}
+
       {editing && (
         <div className="card mb-4">
           <div className="field">
@@ -76,9 +100,10 @@ export default function KnowledgePage() {
           <div className="grow">
             <strong>{k.title}</strong>{" "}
             <span className="tag">{k.agent_name ? `only ${k.agent_name}` : "🌐 global"}</span>
-            <div className="muted small" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 480 }}>{k.content}</div>
+            {k.created_by_agent && <span className="tag" title="Saved by the agent itself">🧠 self-learned</span>}
+            <div className="muted small" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 480 }}>{String(k.content ?? "")}</div>
           </div>
-          <button className="btn" onClick={() => setEditing({ ...k, agent_id: k.agent_id ?? "" })}>Edit</button>
+          <button className="btn" onClick={() => setEditing({ ...k, title: String(k.title ?? ""), content: String(k.content ?? ""), agent_id: k.agent_id ?? "" })}>Edit</button>
           <button className="btn btn-danger-ghost" onClick={() => del(k.id, k.title)}>Delete</button>
         </div>
       ))}

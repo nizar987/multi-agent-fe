@@ -23,13 +23,32 @@ function isAllowed(filePath: string, allowedDirs: string[]): boolean {
 }
 
 export async function GET(req: NextRequest) {
-  const filePath = req.nextUrl.searchParams.get("path");
-  if (!filePath) return NextResponse.json({ error: "path is required" }, { status: 400 });
+  const rawPath = req.nextUrl.searchParams.get("path");
+  if (!rawPath) return NextResponse.json({ error: "path is required" }, { status: 400 });
+
+  // 🔴 CRITICAL path traversal guard:
+  // 1. Resolve to absolute path (eliminates ../ sequences)
+  // 2. When allowedDirs is configured, the resolved path MUST be inside one of them
+  // 3. When NO dirs are configured yet, deny ALL file access (nothing is allowed)
+  const filePath = path.resolve(rawPath);
+
+  // Reject null bytes (potential bypass on some systems)
+  if (rawPath.includes("\x00")) {
+    return NextResponse.json({ error: "invalid path" }, { status: 400 });
+  }
 
   const cfg = getConfig();
   const allowed = cfg.filesystem.allowedDirs;
 
-  if (allowed.length > 0 && !isAllowed(filePath, allowed)) {
+  // If no allowed dirs configured, deny everything — no implicit access
+  if (allowed.length === 0) {
+    return NextResponse.json(
+      { error: "Access denied — no allowed folders configured. Add folders in Settings → Filesystem." },
+      { status: 403 }
+    );
+  }
+
+  if (!isAllowed(filePath, allowed)) {
     return NextResponse.json({ error: "Access denied — the folder is not in the allow list." }, { status: 403 });
   }
 

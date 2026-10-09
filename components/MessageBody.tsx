@@ -1,7 +1,7 @@
 "use client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -20,7 +20,17 @@ const THINKING_PHRASES = [
 ];
 
 export function ThinkingIndicator({ tool }: { tool?: string }) {
-  const label = tool ? `Using ${tool}…` : THINKING_PHRASES[0];
+  const [phraseIdx, setPhraseIdx] = useState(0);
+
+  useEffect(() => {
+    if (tool) return; // when a tool name is shown, don't rotate phrases
+    const iv = setInterval(() => {
+      setPhraseIdx((i) => (i + 1) % THINKING_PHRASES.length);
+    }, 2000);
+    return () => clearInterval(iv);
+  }, [tool]);
+
+  const label = tool ? `Using ${tool}…` : THINKING_PHRASES[phraseIdx];
   return (
     <div className="agent-thinking">
       <span className="thinking-dots"><span /><span /><span /></span>

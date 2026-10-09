@@ -17,6 +17,7 @@ const TOOL_META: Record<string, { label: string; icon: string; blurb: string }> 
   env: { label: "Env", icon: "🔑", blurb: "Reads .env from the working folder" },
   monitoring: { label: "Monitoring", icon: "📈", blurb: "Grafana / Prometheus / Loki" },
   vision: { label: "Vision (read_image)", icon: "👁", blurb: "Agents read attached images via a vision model" },
+  video: { label: "Video editing", icon: "🎬", blurb: "ffmpeg: trim, concat, transcode, subtitles & AI transcription" },
 };
 
 const DOT: Record<ToolState, string> = {
@@ -86,11 +87,7 @@ export default function ToolsPage() {
                   <span style={{ fontSize: 18 }}>{meta.icon}</span>
                   <strong>{meta.label}</strong>
                   <span style={{ flex: 1 }} />
-                  <span style={{
-                    display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12,
-                    padding: "2px 8px", borderRadius: 999,
-                    border: "1px solid var(--border)", color: "var(--text-secondary)",
-                  }}>
+                  <span className="tag" style={{ gap: 6 }}>
                     <span className={`dot ${DOT[st.status]}`} />
                     {STATE_LABEL[st.status]}
                   </span>

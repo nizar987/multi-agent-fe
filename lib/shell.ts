@@ -35,12 +35,15 @@ export const shellToolDef: AiTool = {
  * Resolve the working directory for a shell command.
  *
  * Priority:
- *  1. Agent's own working_dir (set via the "Open folder" button in AgentForm)
- *  2. First entry in the global filesystem.allowedDirs
- *  3. App data dir as a last-resort fallback
+ *  1. Run-level override (Workspace "working folder" — RunOptions.workingDir)
+ *  2. Agent's own working_dir (set via the "Open folder" button in AgentForm)
+ *  3. First entry in the global filesystem.allowedDirs
+ *  4. App data dir as a last-resort fallback
  */
-export function shellCwd(agentId?: number): string {
-  // 1. Per-agent working_dir
+export function shellCwd(agentId?: number, cwdOverride?: string): string {
+  // 1. Per-run override (workspace working folder)
+  if (cwdOverride && cwdOverride.trim()) return cwdOverride.trim();
+  // 2. Per-agent working_dir
   if (agentId != null) {
     const { getDb } = require("./db") as typeof import("./db");
     const row = getDb()
@@ -48,13 +51,13 @@ export function shellCwd(agentId?: number): string {
       .get(agentId) as { working_dir: string | null } | undefined;
     if (row?.working_dir) return row.working_dir;
   }
-  // 2. Global allowedDirs fallback
+  // 3. Global allowedDirs fallback
   const dirs = getConfig().filesystem.allowedDirs;
   return dirs.length > 0 ? dirs[0] : getDataDir();
 }
 
-export function runShell(command: string, agentId?: number): Promise<string> {
-  const cwd = shellCwd(agentId);
+export function runShell(command: string, agentId?: number, cwdOverride?: string): Promise<string> {
+  const cwd = shellCwd(agentId, cwdOverride);
   return new Promise((resolve) => {
     exec(
       command,
@@ -84,20 +87,52 @@ export function runShell(command: string, agentId?: number): Promise<string> {
  */
 export type ApprovalDecision = "always" | "once" | "deny";
 
-type Pending = { resolve: (decision: ApprovalDecision) => void; timer: ReturnType<typeof setTimeout> };
+/** What the approval is about — shown in the notification / pending list. */
+export interface ApprovalMeta {
+  kind: string;   // shell | database | redis | env
+  detail: string; // the command / SQL / detail string
+}
+
+export interface PendingApproval extends ApprovalMeta {
+  id: string;
+  createdAt: number; // epoch ms
+  expiresAt: number; // epoch ms — the request auto-denies after this
+}
+
+type Pending = {
+  resolve: (decision: ApprovalDecision) => void;
+  timer: ReturnType<typeof setTimeout>;
+  meta: PendingApproval;
+};
 const pending: Map<string, Pending> =
   (globalThis as any).__shellApprovals ?? new Map();
 (globalThis as any).__shellApprovals = pending;
 
 /** Called by the runtime: waits for the user's decision for this tool_use_id. */
-export function awaitApproval(id: string, timeoutMs = 180_000): Promise<ApprovalDecision> {
+export function awaitApproval(id: string, meta?: ApprovalMeta, timeoutMs = 180_000): Promise<ApprovalDecision> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(id);
       resolve("deny");
     }, timeoutMs);
-    pending.set(id, { resolve, timer });
+    const now = Date.now();
+    pending.set(id, {
+      resolve,
+      timer,
+      meta: {
+        id,
+        kind: meta?.kind ?? "action",
+        detail: meta?.detail ?? "",
+        createdAt: now,
+        expiresAt: now + timeoutMs,
+      },
+    });
   });
+}
+
+/** All approval requests currently waiting for the user (oldest first). */
+export function listPendingApprovals(): PendingApproval[] {
+  return [...pending.values()].map((p) => p.meta).sort((a, b) => a.createdAt - b.createdAt);
 }
 
 /** Called by the approve endpoint: resolves the user's decision. */

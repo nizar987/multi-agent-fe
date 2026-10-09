@@ -4,6 +4,7 @@ import SecretField from "@/components/SecretField";
 import TestConnection from "@/components/TestConnection";
 import ConnectionsManager from "@/components/ConnectionsManager";
 import ModelSelect from "@/components/ModelSelect";
+import NvidiaNimSection from "@/components/NvidiaNimSection";
 
 const MODEL_PRESETS = ["claude-sonnet-5", "claude-opus-4.8", "claude-haiku-4.5"];
 
@@ -41,13 +42,22 @@ export default function ConnectionsPage() {
     <div>
       <h1>Connections</h1>
 
+      {/* ============ NVIDIA NIM (separate section) ============ */}
+      <NvidiaNimSection onChanged={load} />
+
       {/* ============ Connections (multiple per type) ============ */}
       <section className="settings-section" id="connections">
         <div className="hint mb-2">
           Add as many AI providers, GitHub, GitLab, database and Redis connections as you like —
           pick which one is <strong>active</strong> for each type. Agents always use the active connection.
+          NVIDIA NIM is managed separately above.
         </div>
-        <ConnectionsManager onChanged={load} />
+        <ConnectionsManager
+          onChanged={load}
+          filter={(c) =>
+            !(c.kind === "ai" && String(c.config.baseUrl || "").toLowerCase().includes("nvidia.com"))
+          }
+        />
       </section>
 
       {/* ============ Active AI values ============ */}

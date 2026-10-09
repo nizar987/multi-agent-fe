@@ -5,6 +5,8 @@ import AgentAvatar from "@/components/AgentAvatar";
 import ApprovalCard, { ApprovalItem } from "@/components/ApprovalCard";
 import AskUserCard, { AskItem } from "@/components/AskUserCard";
 import PreviewPanel from "@/components/PreviewPanel";
+import ProgressPanel, { Todo } from "@/components/ProgressPanel";
+import TeamBoard, { BoardNote, FileLock } from "@/components/TeamBoard";
 import { detectTargets, type PreviewTarget } from "@/lib/preview-detect";
 import ModeSelect, { RunMode } from "@/components/ModeSelect";
 import PanelIcon from "@/components/PanelIcon";
@@ -13,6 +15,7 @@ import { PickedAttachment, toWire, parseStoredMessage, stripAttachTag } from "@/
 import ManagerRun from "@/components/ManagerRun";
 import ConnectorModal from "@/components/ConnectorModal";
 import ModelSelect from "@/components/ModelSelect";
+import FolderPicker from "@/components/FolderPicker";
 import MessageBody, { ThinkingIndicator, ToolProgress } from "@/components/MessageBody";
 
 type WsMode = "parallel" | "manager";
@@ -54,6 +57,13 @@ export default function WorkspacePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [model, setModel] = useState("");
+  // Working folder: shell commands of every agent in this workspace run here.
+  const [workingDir, setWorkingDir] = useState<string>("");
+  // Progress checklists per agent (AI-maintained via progress_update).
+  const [wsTodos, setWsTodos] = useState<Record<number, Todo[]>>({});
+  const [progressOpen, setProgressOpen] = useState(true);
+  // Team board (agents' shared notes) + files locked by running agents.
+  const [board, setBoard] = useState<{ notes: BoardNote[]; locks: FileLock[] }>({ notes: [], locks: [] });
   const [sessions, setSessions] = useState<WsSession[]>([]);
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
@@ -61,6 +71,58 @@ export default function WorkspacePage() {
   const pickerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [selReply, setSelReply] = useState<{ x: number; y: number; text: string } | null>(null);
+
+  // Restore/persist the working folder across visits.
+  useEffect(() => {
+    try { setWorkingDir(localStorage.getItem("ws_working_dir") ?? ""); } catch { /* ignore */ }
+  }, []);
+
+  // Load the persisted per-agent checklists whenever the session changes.
+  useEffect(() => {
+    if (!sessionId) { setWsTodos({}); return; }
+    fetch(`/api/todos?sessionId=${sessionId}`)
+      .then((r) => r.json())
+      .then((d) => setWsTodos(d && typeof d === "object" && !Array.isArray(d) ? d : {}))
+      .catch(() => setWsTodos({}));
+  }, [sessionId]);
+
+  // Team board: load on session change, poll while agents are running.
+  useEffect(() => {
+    let stopped = false;
+    const load = () =>
+      fetch(`/api/workspace/board${sessionId ? `?sessionId=${sessionId}` : ""}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (stopped || !d) return;
+          setBoard({ notes: Array.isArray(d.notes) ? d.notes : [], locks: Array.isArray(d.locks) ? d.locks : [] });
+        })
+        .catch(() => { /* board is best-effort */ });
+    load();
+    if (!busy) return () => { stopped = true; };
+    const t = setInterval(load, 3000);
+    return () => { stopped = true; clearInterval(t); };
+  }, [sessionId, busy]);
+
+  // Deep link from the Tasks page: /workspace?managerTask=<id> opens the
+  // manager view with that task's progress. (window.location instead of
+  // useSearchParams to avoid the Suspense-boundary requirement.)
+  useEffect(() => {
+    try {
+      const raw = new URLSearchParams(window.location.search).get("managerTask");
+      const tid = raw ? Number(raw) : NaN;
+      if (Number.isFinite(tid) && tid > 0) {
+        setWsMode("manager");
+        setManagerTaskIds((prev) => (prev.includes(tid) ? prev : [...prev, tid]));
+      }
+    } catch { /* ignore */ }
+  }, []);
+  const applyWorkingDir = (dir: string) => {
+    setWorkingDir(dir);
+    try {
+      if (dir) localStorage.setItem("ws_working_dir", dir);
+      else localStorage.removeItem("ws_working_dir");
+    } catch { /* ignore */ }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -382,7 +444,7 @@ export default function WorkspacePage() {
       const res = await fetch("/api/workspace/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: text, agentIds: ids, mode: runMode, attachments: atts.map(toWire), model: model || undefined, sessionId: sid ?? sessionId ?? undefined }),
+        body: JSON.stringify({ message: text, agentIds: ids, mode: runMode, attachments: atts.map(toWire), model: model || undefined, sessionId: sid ?? sessionId ?? undefined, workingDir: workingDir || undefined }),
       });
       if (res.status === 428) { setNeedsKey(true); setBusy(false); setWorking(new Set()); return; }
       if (!res.ok || !res.body) throw new Error(await res.text());
@@ -442,6 +504,7 @@ export default function WorkspacePage() {
             return { ...r, tools };
           });
           else if (ev.type === "system_notice") patch(id, (r) => ({ ...r, notices: [...r.notices, ev.text] }));
+          else if (ev.type === "todos") setWsTodos((prev) => ({ ...prev, [id]: Array.isArray(ev.todos) ? ev.todos : [] }));
           else if (ev.type === "done") {
             // Skip if already stopped by user
             setRounds((prev) => {
@@ -607,6 +670,9 @@ export default function WorkspacePage() {
     );
   }
 
+  const hasBoard = board.notes.length > 0 || board.locks.length > 0;
+  const hasSidePanel = hasBoard || Object.values(wsTodos).some((l) => l.length > 0);
+
   return (
     <div style={{ display: "flex", height: "calc(100vh - 64px)", margin: -32, overflow: "hidden" }}>
       {/* sessions history sidebar */}
@@ -660,6 +726,19 @@ export default function WorkspacePage() {
               : "add the agents that should work — they run in parallel"}
           </span>
           <span style={{ flex: 1 }} />
+          {/* Working folder: shell commands of all picked agents run here */}
+          <FolderPicker
+            value={workingDir}
+            onChange={applyWorkingDir}
+            placeholder="Working folder"
+            disabled={busy}
+          />
+          <button
+            className={`btn btn-icon${progressOpen && hasSidePanel ? " active" : ""}`}
+            onClick={() => setProgressOpen((v) => !v)}
+            title="Show/hide the agents' progress checklists and team board"
+            disabled={!hasSidePanel}
+          >☑</button>
           <button
             className={`btn btn-icon${previewTarget ? " active" : ""}`}
             onClick={() => setPreviewTarget(null)}
@@ -961,6 +1040,15 @@ export default function WorkspacePage() {
           style={{ left: selReply.x, top: selReply.y }}
           onMouseDown={(e) => { e.preventDefault(); replyToSelection(); }}
         >↩ Reply</button>
+      )}
+
+      {/* progress checklists — one list per agent, persisted per session */}
+      {progressOpen && hasSidePanel && (
+        <ProgressPanel
+          byAgent={Object.entries(wsTodos).map(([aid, list]) => [agentById(Number(aid))?.name ?? `Agent #${aid}`, list])}
+          extra={hasBoard ? <TeamBoard notes={board.notes} locks={board.locks} /> : undefined}
+          onClose={() => setProgressOpen(false)}
+        />
       )}
 
       {/* panel preview */}

@@ -1,12 +1,23 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export default function SkillsPage() {
   const [skills, setSkills] = useState<any[]>([]);
   const [editing, setEditing] = useState<any | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const load = () => fetch("/api/skills").then((r) => r.json()).then(setSkills);
-  useEffect(() => { load(); }, []);
+  const load = useCallback(async () => {
+    try {
+      setLoadError(null);
+      const r = await fetch("/api/skills");
+      if (!r.ok) throw new Error(`Server error: ${r.status}`);
+      setSkills(await r.json());
+    } catch (e: any) {
+      setLoadError(e.message);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   const save = async () => {
     const body = { name: editing.name, description: editing.description, content: editing.content };
@@ -56,13 +67,21 @@ export default function SkillsPage() {
         </div>
       )}
 
-      {skills.length === 0 && !editing && (
+      {loadError && (
+        <div className="banner-danger" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ flex: 1 }}>Failed to load skills: {loadError}</span>
+          <button className="btn" onClick={load}>Retry</button>
+        </div>
+      )}
+
+      {skills.length === 0 && !editing && !loadError && (
         <div className="empty-state"><div className="glyph">✦</div>No skills in the library yet.</div>
       )}
       {skills.map((s) => (
         <div key={s.id} className="list-row">
           <div className="grow">
             <strong>{s.name}</strong>
+            {s.created_by_agent && <> <span className="tag" title="Created by an agent itself">🧠 self-learned</span></>}
             <div className="muted small">{s.description}</div>
           </div>
           <button className="btn" onClick={() => setEditing(s)}>Edit</button>

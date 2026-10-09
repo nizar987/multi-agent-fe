@@ -69,10 +69,16 @@ function wsConversation(agentId: number, sessionId?: number): number {
   return Number(r.lastInsertRowid);
 }
 
+/** Team-board key of a workspace session (legacy sessionless workspace → "ws:default"). */
+function boardKeyFor(sessionId: unknown): string {
+  return typeof sessionId === "number" ? `ws:${sessionId}` : "ws:default";
+}
+
 export async function POST(req: NextRequest) {
-  const { message, agentIds, mode: rawMode, attachments, model, sessionId } = await req.json();
+  const { message, agentIds, mode: rawMode, attachments, model, sessionId, workingDir } = await req.json();
   const mode: RunMode = ["approval", "act", "plan"].includes(rawMode) ? rawMode : "approval";
   const modelOverride = typeof model === "string" && model.trim() ? model.trim() : undefined;
+  const wsDir = typeof workingDir === "string" && workingDir.trim() ? workingDir.trim() : undefined;
   const atts: Attachment[] = Array.isArray(attachments) ? attachments : [];
   if (!Array.isArray(agentIds) || agentIds.length === 0) {
     return Response.json({ error: "pick at least one agent" }, { status: 400 });
@@ -93,10 +99,20 @@ export async function POST(req: NextRequest) {
   const db = getDb();
   const encoder = new TextEncoder();
 
+  // Runs must SURVIVE the page being closed: `send` swallows enqueue errors
+  // after the client disconnects; every agent keeps working in the background
+  // and its answer is still saved to its workspace conversation.
+  let clientGone = false;
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (agentId: number, e: RunEvent) =>
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ agentId, ...e })}\n\n`));
+      const send = (agentId: number, e: RunEvent) => {
+        if (clientGone) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ agentId, ...e })}\n\n`));
+        } catch {
+          clientGone = true; // stream cancelled — keep running, drop events
+        }
+      };
 
       const runs = (agentIds as number[]).map(async (agentId) => {
         const convId = wsConversation(agentId, typeof sessionId === "number" ? sessionId : undefined);
@@ -108,7 +124,14 @@ export async function POST(req: NextRequest) {
           .map(rowToAiMessage);
 
         try {
-          const finalText = await runAgent(agentId, history, (e) => send(agentId, e), 0, mode, { interactive: true, ...(modelOverride ? { modelOverride } : {}) });
+          const finalText = await runAgent(agentId, history, (e) => send(agentId, e), 0, mode, {
+            interactive: true,
+            conversationId: convId,
+            // Team board shared by every agent of this workspace session.
+            boardKey: boardKeyFor(sessionId),
+            ...(modelOverride ? { modelOverride } : {}),
+            ...(wsDir ? { workingDir: wsDir } : {}),
+          });
           db.prepare("INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)")
             .run(convId, "assistant", finalText || "(no answer)");
           send(agentId, { type: "done", finalText });
@@ -122,7 +145,10 @@ export async function POST(req: NextRequest) {
       });
 
       await Promise.allSettled(runs);
-      controller.close();
+      try { controller.close(); } catch { /* already cancelled */ }
+    },
+    cancel() {
+      clientGone = true; // user left the page — do NOT stop the runs
     },
   });
 

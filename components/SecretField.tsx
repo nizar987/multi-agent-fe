@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Secret field pattern (DESIGN 2.1): always masked (last 4 chars),
@@ -21,6 +21,14 @@ export default function SecretField({
   const [value, setValue] = useState("");
   const [revealed, setRevealed] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-clear revealed secret when window loses focus (CRITICAL-1)
+  useEffect(() => {
+    const clearOnBlur = () => setRevealed(null);
+    window.addEventListener("blur", clearOnBlur);
+    return () => window.removeEventListener("blur", clearOnBlur);
+  }, []);
 
   const save = async () => {
     if (!value.trim()) return;
@@ -56,6 +64,14 @@ export default function SecretField({
       body: JSON.stringify({ name, action: "reveal" }),
     }).then((r) => r.json());
     setRevealed(r.value ?? "(failed to read)");
+    // Auto-clear after 10 seconds even if mouse-up was missed (CRITICAL-1)
+    if (clearTimer.current) clearTimeout(clearTimer.current);
+    clearTimer.current = setTimeout(() => setRevealed(null), 10_000);
+  };
+
+  const hideRevealed = () => {
+    setRevealed(null);
+    if (clearTimer.current) { clearTimeout(clearTimer.current); clearTimer.current = null; }
   };
 
   return (
@@ -72,8 +88,9 @@ export default function SecretField({
             className="btn"
             title="Show while held"
             onMouseDown={reveal}
-            onMouseUp={() => setRevealed(null)}
-            onMouseLeave={() => setRevealed(null)}
+            onMouseUp={hideRevealed}
+            onMouseLeave={hideRevealed}
+            aria-label={`Show ${label}`}
           >👁</button>
           <button className="btn" onClick={() => setEditing(true)}>Replace</button>
           <button className="btn btn-danger-ghost" onClick={remove}>Delete</button>

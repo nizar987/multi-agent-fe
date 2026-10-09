@@ -22,24 +22,35 @@ function ts(): string {
   return new Date().toISOString().replace("T", " ").replace("Z", "");
 }
 
+/** How often to check if the log file needs trimming (every 100 writes). */
+let writeCount = 0;
+const TRIM_INTERVAL = 100;
+
 function write(level: "INFO" | "WARN" | "ERROR", msg: string) {
   const line = `[${ts()}] [${level}] ${msg}\n`;
   try {
     fs.appendFileSync(logFile(), line);
-    trim();
+    // 🟠 MAJOR: trim was reading+writing the entire file on every log call.
+    // Now only trim every TRIM_INTERVAL writes to avoid O(n) I/O per log line.
+    writeCount++;
+    if (writeCount % TRIM_INTERVAL === 0) trim();
   } catch {
     /* swallow — logging must never crash the app */
   }
 }
 
-/** Keep log file under MAX_LINES. */
+/** Keep log file under MAX_LINES. Called periodically, not on every write. */
 function trim() {
   try {
-    const content = fs.readFileSync(logFile(), "utf8");
+    const file = logFile();
+    const stat = fs.statSync(file);
+    // Skip trim if file is small (< 512 KB) — not worth the read cost.
+    if (stat.size < 512 * 1024) return;
+    const content = fs.readFileSync(file, "utf8");
     const lines = content.split("\n");
     if (lines.length > MAX_LINES) {
       const trimmed = lines.slice(lines.length - MAX_LINES).join("\n");
-      fs.writeFileSync(logFile(), trimmed);
+      fs.writeFileSync(file, trimmed);
     }
   } catch {
     /* ignore */

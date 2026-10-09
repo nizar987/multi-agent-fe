@@ -9,6 +9,9 @@ export function getDb(): Database.Database {
   const file = path.join(getDataDir(), "app.db");
   db = new Database(file);
   db.pragma("journal_mode = WAL");
+  // 🟡 MINOR: SQLite does NOT enforce FK constraints by default.
+  // Without this, ON DELETE CASCADE and FK integrity checks are silently ignored.
+  db.pragma("foreign_keys = ON");
   migrate(db);
   return db;
 }
@@ -103,7 +106,7 @@ function migrate(d: Database.Database) {
     CREATE TABLE IF NOT EXISTS task_assignments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id INTEGER NOT NULL REFERENCES manager_tasks(id) ON DELETE CASCADE,
-      agent_id INTEGER NOT NULL REFERENCES agents(id),
+      agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
       agent_name TEXT NOT NULL DEFAULT '',        -- snapshot nama agent utk laporan
       subtask_description TEXT NOT NULL,
       position INTEGER NOT NULL DEFAULT 0,         -- urutan eksekusi (sequential)
@@ -122,7 +125,7 @@ function migrate(d: Database.Database) {
     CREATE TABLE IF NOT EXISTS task_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id INTEGER NOT NULL REFERENCES manager_tasks(id) ON DELETE CASCADE,
-      assignment_id INTEGER REFERENCES task_assignments(id),
+      assignment_id INTEGER REFERENCES task_assignments(id) ON DELETE SET NULL,
       event_type TEXT NOT NULL,
       content TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -177,6 +180,50 @@ function migrate(d: Database.Database) {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    /* ---------- tickets (Tasks page → executed by the Agent Manager) ---------- */
+    CREATE TABLE IF NOT EXISTS tickets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('low','medium','high')),
+      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','executing','done','failed')),
+      manager_task_id INTEGER DEFAULT NULL REFERENCES manager_tasks(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    /* ---------- run progress todos (AI-maintained checklist per conversation) ---------- */
+    CREATE TABLE IF NOT EXISTS run_todos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      content TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','done')),
+      position INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_run_todos_conv ON run_todos(conversation_id);
+
+    /* ---------- work journal (auto-memory: what each agent worked on & where) ---------- */
+    CREATE TABLE IF NOT EXISTS work_journal (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      conversation_id INTEGER DEFAULT NULL,
+      request TEXT NOT NULL,
+      working_dir TEXT NOT NULL DEFAULT '',
+      at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_work_journal_agent ON work_journal(agent_id, id);
+
+    /* ---------- team board (notes shared by agents running in parallel) ---------- */
+    CREATE TABLE IF NOT EXISTS board_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      board_key TEXT NOT NULL,                     -- ws:<sessionId> | task:<taskId>
+      agent_id INTEGER DEFAULT NULL,
+      agent_name TEXT NOT NULL DEFAULT '',
+      note TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_board_notes_key ON board_notes(board_key, id);
+
     /* ---------- token usage log ---------- */
     CREATE TABLE IF NOT EXISTS token_usage (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -215,6 +262,80 @@ function migrate(d: Database.Database) {
   // attachments (JSON array of {name,kind,mediaType,data}) for file/photo uploads
   if (!tcols.includes("attachments")) d.exec("ALTER TABLE manager_tasks ADD COLUMN attachments TEXT DEFAULT NULL");
 
+  // manager: the original task_assignments/task_events shipped with plain
+  // REFERENCES (= ON DELETE NO ACTION). Harmless while SQLite ignored foreign
+  // keys, but now that `foreign_keys = ON` is enforced it makes "delete agent"
+  // fail for every agent that ever ran a manager task. SQLite cannot alter a
+  // foreign key, so rebuild both tables once:
+  //   task_assignments.agent_id      → ON DELETE CASCADE (drop the agent's rows)
+  //   task_events.assignment_id      → ON DELETE SET NULL (keep the event log)
+  const assignFk = d.prepare("PRAGMA foreign_key_list(task_assignments)").all() as Array<{
+    table: string;
+    from: string;
+    on_delete: string;
+  }>;
+  const agentFk = assignFk.find((f) => f.from === "agent_id");
+  if (agentFk && agentFk.on_delete !== "CASCADE") {
+    d.pragma("foreign_keys = OFF"); // required for a table rebuild
+    try {
+      d.exec(`
+        BEGIN;
+        CREATE TABLE task_assignments_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER NOT NULL REFERENCES manager_tasks(id) ON DELETE CASCADE,
+          agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+          agent_name TEXT NOT NULL DEFAULT '',
+          subtask_description TEXT NOT NULL,
+          position INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL CHECK (status IN (
+            'pending','in_progress','submitted','needs_revision','approved','failed'
+          )),
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          revision_count INTEGER NOT NULL DEFAULT 0,
+          last_plan TEXT,
+          last_result TEXT,
+          last_review_notes TEXT,
+          conversation_id INTEGER DEFAULT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        /* rows whose task or agent no longer exists were already broken — drop them */
+        INSERT INTO task_assignments_new
+          SELECT id,task_id,agent_id,agent_name,subtask_description,position,status,
+                 attempt_count,revision_count,last_plan,last_result,last_review_notes,
+                 conversation_id,created_at,updated_at
+          FROM task_assignments
+          WHERE task_id IN (SELECT id FROM manager_tasks)
+            AND agent_id IN (SELECT id FROM agents);
+        DROP TABLE task_assignments;
+        ALTER TABLE task_assignments_new RENAME TO task_assignments;
+
+        CREATE TABLE task_events_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER NOT NULL REFERENCES manager_tasks(id) ON DELETE CASCADE,
+          assignment_id INTEGER REFERENCES task_assignments(id) ON DELETE SET NULL,
+          event_type TEXT NOT NULL,
+          content TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO task_events_new
+          SELECT id,task_id,
+                 CASE WHEN assignment_id IN (SELECT id FROM task_assignments) THEN assignment_id END,
+                 event_type,content,created_at
+          FROM task_events
+          WHERE task_id IN (SELECT id FROM manager_tasks);
+        DROP TABLE task_events;
+        ALTER TABLE task_events_new RENAME TO task_events;
+
+        CREATE INDEX IF NOT EXISTS idx_assignments_task ON task_assignments(task_id);
+        CREATE INDEX IF NOT EXISTS idx_events_task ON task_events(task_id);
+        COMMIT;
+      `);
+    } finally {
+      d.pragma("foreign_keys = ON");
+    }
+  }
+
   // connections: older DBs have a CHECK that only allows the original four kinds.
   // SQLite cannot alter a CHECK, so rebuild the table once when the monitoring kinds are missing.
   const connSql = String(
@@ -238,6 +359,30 @@ function migrate(d: Database.Database) {
       COMMIT;
     `);
   }
+
+  // token_usage: prompt-cache counters (subsets of input_tokens).
+  const ucols = (d.prepare("PRAGMA table_info(token_usage)").all() as any[]).map((c) => c.name);
+  if (!ucols.includes("cache_read_tokens")) d.exec("ALTER TABLE token_usage ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0");
+  if (!ucols.includes("cache_write_tokens")) d.exec("ALTER TABLE token_usage ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0");
+
+  // created_by_agent: rows an agent wrote for itself via the self-learning tools
+  // (NULL = written by the user). Agents may only edit/delete their own rows.
+  const kcols = (d.prepare("PRAGMA table_info(knowledge)").all() as any[]).map((c) => c.name);
+  if (!kcols.includes("created_by_agent")) d.exec("ALTER TABLE knowledge ADD COLUMN created_by_agent INTEGER DEFAULT NULL");
+  const scols = (d.prepare("PRAGMA table_info(skills)").all() as any[]).map((c) => c.name);
+  if (!scols.includes("created_by_agent")) d.exec("ALTER TABLE skills ADD COLUMN created_by_agent INTEGER DEFAULT NULL");
+
+  // Text columns that were written as BLOBs (e.g. by an external script binding
+  // a Buffer) come back from better-sqlite3 as Buffers, serialize to
+  // {type:"Buffer",data:[…]} and crash any page that renders them. Normalize once.
+  d.exec(`
+    UPDATE knowledge SET title=CAST(title AS TEXT) WHERE typeof(title)='blob';
+    UPDATE knowledge SET content=CAST(content AS TEXT) WHERE typeof(content)='blob';
+    UPDATE skills SET name=CAST(name AS TEXT) WHERE typeof(name)='blob';
+    UPDATE skills SET description=CAST(description AS TEXT) WHERE typeof(description)='blob';
+    UPDATE skills SET content=CAST(content AS TEXT) WHERE typeof(content)='blob';
+    UPDATE memories SET value=CAST(value AS TEXT) WHERE typeof(value)='blob';
+  `);
 }
 
 /* ---------- app meta ---------- */

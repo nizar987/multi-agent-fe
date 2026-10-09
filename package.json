@@ -76,6 +76,7 @@
       "category": "Development",
       "maintainer": "lordasu"
     },
+    "afterPack": "scripts/adhoc-sign.js",
     "mac": {
       "target": [
         "dmg"

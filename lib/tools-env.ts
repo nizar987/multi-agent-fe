@@ -28,18 +28,27 @@ export const envToolDefs: AiTool[] = [
   },
 ];
 
-/** Validate the requested name: .env / .env.* only, no path traversal. */
-export function resolveEnvPath(filename?: string): string {
+/**
+ * Validate the requested name: .env / .env.* only, no path traversal.
+ * Resolved against the SAME folder run_shell uses, so the approval card and
+ * the agent both see the .env of the project actually being worked on.
+ */
+export function resolveEnvPath(filename?: string, agentId?: number, cwdOverride?: string): string {
   const name = (filename ?? ".env").trim();
   if (!/^\.env(\.[A-Za-z0-9._-]+)?$/.test(name)) {
     throw new Error(`Invalid env file name "${name}" — only .env or .env.* is allowed.`);
   }
-  return path.join(shellCwd(), name);
+  return path.join(shellCwd(agentId, cwdOverride), name);
 }
 
-export async function callEnvTool(name: string, input: unknown): Promise<string> {
+export async function callEnvTool(
+  name: string,
+  input: unknown,
+  agentId?: number,
+  cwdOverride?: string
+): Promise<string> {
   if (name !== "read_env") throw new Error("Unknown env tool.");
-  const filePath = resolveEnvPath((input as { filename?: string })?.filename);
+  const filePath = resolveEnvPath((input as { filename?: string })?.filename, agentId, cwdOverride);
   let stat: fs.Stats;
   try {
     stat = fs.statSync(filePath);

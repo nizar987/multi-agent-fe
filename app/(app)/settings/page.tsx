@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import ToolCacheSettings from "@/components/ToolCacheSettings";
 
 export default function SettingsPage() {
   const [data, setData] = useState<any>(null);
@@ -35,7 +36,15 @@ export default function SettingsPage() {
   };
 
   const setTheme = (theme: string) => {
-    document.documentElement.dataset.theme = theme === "system" ? "" : theme;
+    // Apply immediately to <html> so there is no flash
+    if (theme === "system") {
+      delete document.documentElement.dataset.theme;
+    } else {
+      document.documentElement.dataset.theme = theme;
+    }
+    // Persist to localStorage so the theme-init script (app/layout.tsx)
+    // can restore the correct theme on next load before first paint.
+    try { localStorage.setItem("agent_platform_theme", theme); } catch { /* ignore */ }
     saveConfig({ ui: { theme } });
   };
 
@@ -63,9 +72,34 @@ export default function SettingsPage() {
 
   if (!data) return <div className="skeleton" style={{ width: 300, height: 20 }} />;
 
+  const aiKeyMissing = !data.secrets?.aiApiKey?.set;
+
   return (
     <div>
       <h1>Settings</h1>
+
+      {/* AI key missing — one-click CTA to Connections (DESIGN §5) */}
+      {aiKeyMissing && (
+        <div className="card" style={{
+          borderColor: "var(--accent)",
+          background: "var(--accent-soft)",
+          marginBottom: "var(--space-5)",
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-4)",
+          flexWrap: "wrap",
+        }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <strong>Connect an AI model first</strong>
+            <p className="muted small" style={{ margin: "4px 0 0" }}>
+              Agents need an API key to answer. Takes less than a minute.
+            </p>
+          </div>
+          <Link href="/connections#ai" className="btn btn-primary" style={{ flexShrink: 0 }}>
+            Open Connections → AI Provider
+          </Link>
+        </div>
+      )}
 
       <p className="muted small">
         Looking for AI providers & connectors? They moved to <Link href="/connections">Connections</Link>.
@@ -131,6 +165,9 @@ export default function SettingsPage() {
           )}
         </div>
       </section>
+
+      {/* ============ Tool cache ============ */}
+      <ToolCacheSettings />
 
       {/* ============ Appearance & more ============ */}
       <section className="settings-section" id="misc">

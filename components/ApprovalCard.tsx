@@ -1,6 +1,6 @@
 "use client";
 
-export type ApprovalKind = "shell" | "database" | "redis" | "env";
+export type ApprovalKind = "shell" | "database" | "redis" | "env" | "learning";
 export type ApprovalDecision = "always" | "once" | "deny";
 
 export interface ApprovalItem {
@@ -20,6 +20,7 @@ const TITLES: Record<ApprovalKind, string> = {
   database: "🗄 Wants to run SQL (modifies data)",
   redis: "⚡ Wants to write to Redis",
   env: "🔑 Wants to read a .env file",
+  learning: "🧠 Wants to change your knowledge / skills / shared memory",
 };
 
 /** Approval card for risky actions — one mechanism for shell, SQL, Redis, and .env reads. */

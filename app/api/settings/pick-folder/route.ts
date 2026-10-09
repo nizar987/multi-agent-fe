@@ -4,6 +4,12 @@ import { getConfig, updateConfig } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 
+/** Return the list of folders that have been picked before. */
+export async function GET() {
+  const cfg = getConfig();
+  return NextResponse.json({ folders: cfg.filesystem.allowedDirs });
+}
+
 /** Open the native OS folder dialog (Electron). */
 export async function POST() {
   const bridge = getBridge();

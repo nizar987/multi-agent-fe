@@ -18,6 +18,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { getConfig, getSecret, hasSecret, getConnectionSecret, configEvents } from "./config";
 import { getBridge } from "./paths";
+import { logger } from "./logger";
 
 // Tavily's hosted remote MCP server. The API key is passed as a query param
 // (see https://docs.tavily.com/documentation/mcp#remote-mcp-server).
@@ -106,6 +107,8 @@ async function startServer(name: McpServerName): Promise<void> {
   let extraEnv: Record<string, string> = {};
   let detailSuffix = "";
   let remoteUrl: string | null = null;
+  /** Auth headers for a remote (Streamable HTTP) server. */
+  let remoteHeaders: Record<string, string> | null = null;
 
   if (name === "filesystem") {
     if (cfg.filesystem.allowedDirs.length === 0) {
@@ -134,13 +137,17 @@ async function startServer(name: McpServerName): Promise<void> {
       detailSuffix = ` (${new URL(cfg.gitlab.apiUrl).host})`;
     } catch { /* keep empty */ }
   } else if (name === "tavily") {
-    // Tavily hosted remote MCP (Streamable HTTP). API key passed as query param.
+    // The API key used to travel as a `?tavilyApiKey=` query param, which lands
+    // in access logs and any intermediary along the way. mcp.tavily.com accepts
+    // `Authorization: Bearer <key>` (verified: header → 200, no auth → 401), so
+    // send it as a header instead.
     const key = getSecret("tavilyApiKey");
     if (!key) {
       m.status = { status: "unconfigured", detail: "No API key yet" };
       return;
     }
-    remoteUrl = `${TAVILY_MCP_URL}?tavilyApiKey=${encodeURIComponent(key)}`;
+    remoteUrl = TAVILY_MCP_URL;
+    remoteHeaders = { Authorization: `Bearer ${key}` };
     detailSuffix = " (mcp.tavily.com)";
   } else {
     // grafana — official mcp-grafana Go binary, config from the ACTIVE grafana connection
@@ -171,21 +178,35 @@ async function startServer(name: McpServerName): Promise<void> {
   }
 
   m.status = { status: "connecting", detail: "Connecting…" };
+  // The child's stderr is the ONLY place a spawn/require failure surfaces
+  // (a crashed server just closes the stdio pipe, so `connect` throws a generic
+  // "connection closed"). Capture it so the real cause is not lost.
+  let stderrTail = "";
   try {
+    let stdioTransport: StdioClientTransport | null = null;
     const transport = remoteUrl
-      ? new StreamableHTTPClientTransport(new URL(remoteUrl))
-      : new StdioClientTransport({
+      ? new StreamableHTTPClientTransport(new URL(remoteUrl), {
+          // Auth for remote servers travels in headers, never in the URL.
+          ...(remoteHeaders ? { requestInit: { headers: remoteHeaders } } : {}),
+        })
+      : (stdioTransport = new StdioClientTransport({
           command,
           args,
           env: { ...process.env as any, ...baseEnv, ...extraEnv },
-          stderr: "ignore",
-        });
+          stderr: "pipe",
+        }));
+    // `stderr` is only readable AFTER the transport starts (client.connect),
+    // so attach the listener right after; SDK buffers the pipe until then.
     const client = new Client({ name: "agent-platform", version: "0.1.0" });
     await client.connect(transport);
+    stdioTransport?.stderr?.on("data", (d: Buffer) => {
+      stderrTail = (stderrTail + d.toString()).slice(-800);
+    });
     const res = await client.listTools();
     m.client = client;
     m.tools = res.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
     m.status = { status: "connected", detail: `connected${detailSuffix} — ${m.tools.length} tools` };
+    logger.info(`MCP ${name}: connected — ${m.tools.length} tools`);
   } catch (e: any) {
     m.client = null;
     m.tools = [];
@@ -194,7 +215,11 @@ async function startServer(name: McpServerName): Promise<void> {
       name === "grafana" && /ENOENT|not found/i.test(msg)
         ? " — install it (go install github.com/grafana/mcp-grafana/cmd/mcp-grafana@latest) or set the binary path on the connection"
         : "";
+    const stderrNote = stderrTail.trim() ? ` | server stderr: ${stderrTail.trim().slice(-300)}` : "";
     m.status = { status: "error", detail: `server failed to start: ${msg.slice(0, 160)}${hint}` };
+    // 🔴 Was fully swallowed before — a filesystem/gitlab failure left no trace
+    // in the log, so "Tool X is unavailable" had no diagnosable cause.
+    logger.error(`MCP ${name} failed to start: ${msg}${stderrNote} | command=${command} args=${JSON.stringify(args)}`);
   }
 }
 
@@ -288,6 +313,17 @@ export async function getToolStatuses(): Promise<Record<string, ToolStatus>> {
     ? { status: "connected", detail: `via ${visionModel}` }
     : { status: "connected", detail: "via the active default model — set a dedicated vision model in Connections" };
 
+  // Video editing: local ffmpeg (not bundled — detected on PATH/common dirs).
+  let video: ToolStatus;
+  try {
+    const { ffmpegAvailable } = await import("./tools-video");
+    video = ffmpegAvailable()
+      ? { status: "connected", detail: "ffmpeg found — trim, concat, transcode, subtitles, transcribe" }
+      : { status: "unconfigured", detail: "ffmpeg not installed (macOS: brew install ffmpeg)" };
+  } catch {
+    video = { status: "unconfigured", detail: "ffmpeg not installed (macOS: brew install ffmpeg)" };
+  }
+
   return {
     filesystem: state.filesystem.status,
     gitlab: state.gitlab.status,
@@ -299,12 +335,18 @@ export async function getToolStatuses(): Promise<Record<string, ToolStatus>> {
     env,
     monitoring,
     vision,
+    video,
   };
 }
 
 export async function listMcpTools(name: McpServerName) {
   const m = await ensureServer(name);
   return m.tools;
+}
+
+/** Current status of one MCP server (for user-facing "why unavailable" notices). */
+export function getMcpStatus(name: McpServerName): ToolStatus {
+  return state[name].status;
 }
 
 export async function callMcpTool(name: McpServerName, tool: string, args: any) {

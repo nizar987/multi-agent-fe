@@ -149,12 +149,14 @@ interface ConnectionView {
 interface ConnectionsManagerProps {
   /** Restrict to specific kinds (defaults to all). */
   kinds?: ConnKind[];
+  /** Exclude connections that don't pass this predicate. */
+  filter?: (c: ConnectionView) => boolean;
   onChanged?: () => void;
 }
 
 /* ---------------- component ---------------- */
 
-export default function ConnectionsManager({ kinds, onChanged }: ConnectionsManagerProps) {
+export default function ConnectionsManager({ kinds, filter, onChanged }: ConnectionsManagerProps) {
   const [conns, setConns] = useState<ConnectionView[] | null>(null);
   const [testing, setTesting] = useState<Record<number, { ok?: boolean; message: string; loading: boolean }>>({});
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -198,7 +200,7 @@ export default function ConnectionsManager({ kinds, onChanged }: ConnectionsMana
   return (
     <div>
       {shown.map((meta) => {
-        const rows = conns.filter((c) => c.kind === meta.kind);
+        const rows = conns.filter((c) => c.kind === meta.kind && (!filter || filter(c)));
         return (
           <div key={meta.kind} className="conn-group">
             <div className="conn-group-title">
