@@ -310,7 +310,12 @@ async function dispatch(
   prompt += `\n\n${SQL_CONSTRAINT}`;
 
   // Worker options: read-only SQL always; force the task's model when set.
-  const opts: RunOptions = { ...WORKER_OPTS, ...(task.model ? { modelOverride: task.model } : {}) };
+  const opts: RunOptions = {
+    ...WORKER_OPTS,
+    // Worker agents of one task coordinate on a shared team board.
+    boardKey: `task:${task.id}`,
+    ...(task.model ? { modelOverride: task.model } : {}),
+  };
 
   assignmentsRepo.update(a.id, { status: "in_progress" });
 

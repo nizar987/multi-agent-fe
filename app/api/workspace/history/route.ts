@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { clearBoard } from "@/lib/team-board";
 
 export const dynamic = "force-dynamic";
 
@@ -37,8 +38,10 @@ export async function DELETE(req: NextRequest) {
   const sessionId = req.nextUrl.searchParams.get("sessionId");
   if (sessionId) {
     db.prepare("DELETE FROM workspace_sessions WHERE id=?").run(Number(sessionId));
+    clearBoard(`ws:${Number(sessionId)}`);
   } else {
     db.prepare("DELETE FROM conversations WHERE title='__workspace__'").run();
+    clearBoard("ws:default");
   }
   return NextResponse.json({ ok: true });
 }

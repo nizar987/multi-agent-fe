@@ -15,6 +15,10 @@ import { hasDocumentBlock } from "./attachments";
 import { logger } from "./logger";
 import { recordUsage } from "./usage-db";
 import { AI_PROVIDER_PRESETS } from "./ai-provider-presets";
+import {
+  promptCacheEnabled, disablePromptCache, isCacheRejection,
+  joinSystem, anthropicSystem, withToolCache, withMessageCache,
+} from "./prompt-cache";
 
 export type AiMessage = { role: "user" | "assistant"; content: any };
 export type AiTool = {
@@ -176,7 +180,12 @@ function fromOpenAi(json: any): any {
     });
   }
   const hasTool = content.some((c) => c.type === "tool_use");
-  return { content, stop_reason: choice.finish_reason === "tool_calls" || hasTool ? "tool_use" : "end_turn" };
+  return {
+    content,
+    stop_reason: choice.finish_reason === "tool_calls" || hasTool
+      ? "tool_use"
+      : choice.finish_reason === "length" ? "max_tokens" : "end_turn", // "length" = truncated output
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -258,7 +267,12 @@ function fromGemini(json: any): any {
       });
     }
   });
-  return { content, stop_reason: content.some((c) => c.type === "tool_use") ? "tool_use" : "end_turn" };
+  return {
+    content,
+    stop_reason: content.some((c) => c.type === "tool_use")
+      ? "tool_use"
+      : json.candidates?.[0]?.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn",
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -266,7 +280,13 @@ function fromGemini(json: any): any {
 /* ------------------------------------------------------------------ */
 
 interface CallOpts {
+  /** Stable system prompt — cached across calls (prompt caching). */
   system?: string;
+  /**
+   * Per-run system text that changes between runs (journal, checklist, memory
+   * notes). Sent AFTER the stable part so it does not invalidate its cache.
+   */
+  systemDynamic?: string;
   messages: AiMessage[];
   tools?: AiTool[];
   model?: string;
@@ -278,25 +298,55 @@ interface CallOpts {
   usageSource?: string;
 }
 
-export interface TokenUsage { input_tokens: number; output_tokens: number }
+/**
+ * input_tokens is the TOTAL prompt size (cached + uncached) for every provider;
+ * cache_read_tokens / cache_write_tokens are the parts of it served from /
+ * written to the provider's prompt cache.
+ */
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+}
+
+/** Anthropic reports input_tokens EXCLUDING cache reads/writes — fold them in. */
+function anthropicUsage(u: any): TokenUsage {
+  const read = Number(u?.cache_read_input_tokens) || 0;
+  const write = Number(u?.cache_creation_input_tokens) || 0;
+  return {
+    input_tokens: (Number(u?.input_tokens) || 0) + read + write,
+    output_tokens: Number(u?.output_tokens) || 0,
+    cache_read_tokens: read,
+    cache_write_tokens: write,
+  };
+}
+
+/** OpenAI-compatible cached prompt tokens (OpenAI/Kimi: prompt_tokens_details; DeepSeek: prompt_cache_hit_tokens). */
+function openAiCachedTokens(u: any): number {
+  return Number(u?.prompt_tokens_details?.cached_tokens) || Number(u?.prompt_cache_hit_tokens) || 0;
+}
 
 /** Pull token counts out of a provider's raw JSON response (best-effort). */
 function extractUsage(provider: AiProvider, json: any): TokenUsage {
   if (!json || typeof json !== "object") return { input_tokens: 0, output_tokens: 0 };
   if (provider === "openai") {
     const u = json.usage ?? {};
-    return { input_tokens: Number(u.prompt_tokens) || 0, output_tokens: Number(u.completion_tokens) || 0 };
+    return {
+      input_tokens: Number(u.prompt_tokens) || 0,
+      output_tokens: Number(u.completion_tokens) || 0,
+      cache_read_tokens: openAiCachedTokens(u),
+    };
   }
   if (provider === "gemini") {
     const u = json.usageMetadata ?? {};
     return {
       input_tokens: Number(u.promptTokenCount) || 0,
       output_tokens: Number(u.candidatesTokenCount) || 0,
+      cache_read_tokens: Number(u.cachedContentTokenCount) || 0,
     };
   }
-  // anthropic
-  const u = json.usage ?? {};
-  return { input_tokens: Number(u.input_tokens) || 0, output_tokens: Number(u.output_tokens) || 0 };
+  return anthropicUsage(json.usage ?? {});
 }
 
 /** Write a usage record for one completed call. Best-effort; never throws. */
@@ -308,6 +358,8 @@ function logUsage(req: { provider: AiProvider; model: string }, usage: TokenUsag
     source: source || "other",
     input_tokens: usage.input_tokens,
     output_tokens: usage.output_tokens,
+    cache_read_tokens: usage.cache_read_tokens ?? 0,
+    cache_write_tokens: usage.cache_write_tokens ?? 0,
   });
 }
 
@@ -339,6 +391,9 @@ function resolveSettings(opts: CallOpts) {
 
 function buildRequest(opts: CallOpts, stream: boolean) {
   const { baseUrl, model, apiKey, provider, maxTokens } = resolveSettings(opts);
+  // openai/gemini cache the longest matching prefix automatically — keeping the
+  // stable system text first (dynamic part last) is all they need.
+  const flatSystem = joinSystem(opts.system, opts.systemDynamic);
   if (!apiKey) throw new AiConfigError("The AI API key is not configured.");
 
   // Diagnostic: surface when vision content is being sent, and via which format.
@@ -353,7 +408,7 @@ function buildRequest(opts: CallOpts, stream: boolean) {
   if (provider === "openai") {
     const oaHeaders: Record<string, string> = { "content-type": "application/json", authorization: `Bearer ${apiKey}` };
     return {
-      provider, baseUrl, model,
+      provider, baseUrl, model, cached: false,
       url: joinUrl(baseUrl, "/v1/chat/completions"),
       headers: oaHeaders,
       body: {
@@ -361,7 +416,7 @@ function buildRequest(opts: CallOpts, stream: boolean) {
         // OpenAI-compatible endpoints (OpenAI, Kimi/Moonshot, …) reject
         // max_tokens above the model's output limit — 16384 is safe everywhere.
         max_tokens: Math.min(maxTokens, 16384),
-        messages: toOpenAiMessages(opts.system, opts.messages),
+        messages: toOpenAiMessages(flatSystem, opts.messages),
         ...(toOpenAiTools(opts.tools) ? { tools: toOpenAiTools(opts.tools) } : {}),
         // Ask for a final usage chunk so token counts are captured while streaming.
         ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
@@ -373,10 +428,10 @@ function buildRequest(opts: CallOpts, stream: boolean) {
     const method = stream ? ":streamGenerateContent?alt=sse" : ":generateContent";
     const gmHeaders: Record<string, string> = { "content-type": "application/json", "x-goog-api-key": apiKey };
     return {
-      provider, baseUrl, model,
+      provider, baseUrl, model, cached: false,
       url: joinUrl(baseUrl, `/v1beta/models/${encodeURIComponent(model)}${method}`),
       headers: gmHeaders,
-      body: toGeminiBody(opts.system, opts.messages, opts.tools, maxTokens),
+      body: toGeminiBody(flatSystem, opts.messages, opts.tools, maxTokens),
     };
   }
 
@@ -391,16 +446,22 @@ function buildRequest(opts: CallOpts, stream: boolean) {
     "anthropic-version": "2023-06-01",
   };
   if (hasDocumentBlock(opts.messages)) headers["anthropic-beta"] = "pdfs-2024-09-25";
+  // Prompt caching: breakpoints on the tool list, the stable system text and
+  // the latest message (≤4 allowed; we use 3). Skipped when this endpoint
+  // already rejected cache_control once.
+  const cached = promptCacheEnabled(baseUrl);
+  const tools = opts.tools && opts.tools.length ? (cached ? withToolCache(opts.tools) : opts.tools) : undefined;
+  const system = cached ? anthropicSystem(opts.system, opts.systemDynamic) : flatSystem;
   return {
-    provider, baseUrl, model,
+    provider, baseUrl, model, cached,
     url: joinUrl(baseUrl, "/v1/messages"),
     headers,
     body: {
       model,
       max_tokens: maxTokens,
-      ...(opts.system ? { system: opts.system } : {}),
-      messages: opts.messages,
-      ...(opts.tools && opts.tools.length ? { tools: opts.tools } : {}),
+      ...(system ? { system } : {}),
+      messages: cached ? withMessageCache(opts.messages) : opts.messages,
+      ...(tools ? { tools } : {}),
       ...(stream ? { stream: true } : {}),
     },
   };
@@ -461,19 +522,36 @@ function normalize(provider: AiProvider, json: any): any {
 /* Non-streaming call                                                  */
 /* ------------------------------------------------------------------ */
 
-/** One AI call (non-streaming) — response normalized to the Anthropic shape. */
-export async function callAi(opts: CallOpts): Promise<any> {
-  const req = buildRequest(opts, false);
-  let res = await fetchWithRetry(
-    req.url,
-    { method: "POST", headers: req.headers, body: JSON.stringify(req.body) },
-    req.baseUrl, req.model
-  );
-  res = await resolve202(res, req.baseUrl, req.headers);
-  if (!res.ok || res.status === 202) {
+/**
+ * Build + send one request and return the successful response. When the
+ * endpoint rejects prompt-caching fields, caching is switched off for that
+ * base URL and the request is re-sent once without them.
+ */
+async function sendRequest(opts: CallOpts, stream: boolean): Promise<{ req: ReturnType<typeof buildRequest>; res: Response }> {
+  for (let attempt = 0; ; attempt++) {
+    const req = buildRequest(opts, stream);
+    const headers = stream ? { ...req.headers, accept: "text/event-stream" } : req.headers;
+    let res = await fetchWithRetry(
+      req.url,
+      { method: "POST", headers, body: JSON.stringify(req.body) },
+      req.baseUrl, req.model
+    );
+    // NVIDIA NIM may answer 202 → poll for the final (non-streamed) result.
+    res = await resolve202(res, req.baseUrl, req.headers);
+    if (res.ok && res.status !== 202) return { req, res };
+
     const detail = await res.text().catch(() => "");
+    if (req.cached && attempt === 0 && isCacheRejection(res.status, detail)) {
+      disablePromptCache(req.baseUrl, detail);
+      continue;
+    }
     throw new Error(humanizeAiError(res.status, detail, req.baseUrl, req.model));
   }
+}
+
+/** One AI call (non-streaming) — response normalized to the Anthropic shape. */
+export async function callAi(opts: CallOpts): Promise<any> {
+  const { req, res } = await sendRequest(opts, false);
   const json = await res.json();
   logUsage(req, extractUsage(req.provider, json), opts.usageSource);
   return normalize(req.provider, json);
@@ -490,18 +568,7 @@ export async function callAi(opts: CallOpts): Promise<any> {
  * Falls back transparently when the gateway replies with plain JSON.
  */
 export async function callAiStream(opts: CallOpts & { onText?: (fullText: string) => void }): Promise<any> {
-  const req = buildRequest(opts, true);
-  let res = await fetchWithRetry(
-    req.url,
-    { method: "POST", headers: { ...req.headers, accept: "text/event-stream" }, body: JSON.stringify(req.body) },
-    req.baseUrl, req.model
-  );
-  // NVIDIA NIM may answer 202 → poll for the final (non-streamed) result.
-  res = await resolve202(res, req.baseUrl, req.headers);
-  if (!res.ok || res.status === 202) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(humanizeAiError(res.status, detail, req.baseUrl, req.model));
-  }
+  const { req, res } = await sendRequest(opts, true);
 
   // Some gateways ignore `stream` and reply with plain JSON — handle both.
   const ctype = res.headers.get("content-type") ?? "";
@@ -548,7 +615,7 @@ async function streamAnthropic(events: AsyncGenerator<any>, onText?: (t: string)
   const content: any[] = [];
   const partialJson: Record<number, string> = {};
   let stopReason: string | null = null;
-  const usage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
+  let usage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
 
   const emitText = () => {
     if (!onText) return;
@@ -559,10 +626,7 @@ async function streamAnthropic(events: AsyncGenerator<any>, onText?: (t: string)
   for await (const ev of events) {
     if (ev.type === "message_start") {
       const u = ev.message?.usage;
-      if (u) {
-        usage.input_tokens = Number(u.input_tokens) || 0;
-        usage.output_tokens = Number(u.output_tokens) || 0;
-      }
+      if (u) usage = anthropicUsage(u);
     } else if (ev.type === "content_block_start") {
       content[ev.index] = { ...ev.content_block };
       if (ev.content_block?.type === "tool_use") {
@@ -607,6 +671,7 @@ async function streamOpenAi(events: AsyncGenerator<any>, onText?: (t: string) =>
     if (ev.usage) {
       usage.input_tokens = Number(ev.usage.prompt_tokens) || usage.input_tokens;
       usage.output_tokens = Number(ev.usage.completion_tokens) || usage.output_tokens;
+      usage.cache_read_tokens = openAiCachedTokens(ev.usage) || usage.cache_read_tokens;
     }
     const choice = ev.choices?.[0];
     if (!choice) continue;
@@ -647,19 +712,28 @@ async function streamOpenAi(events: AsyncGenerator<any>, onText?: (t: string) =>
     });
   }
   const hasTool = content.some((c) => c.type === "tool_use");
-  return { content, stop_reason: finish === "tool_calls" || hasTool ? "tool_use" : "end_turn", usage };
+  return {
+    content,
+    stop_reason: finish === "tool_calls" || hasTool
+      ? "tool_use"
+      : finish === "length" ? "max_tokens" : "end_turn", // "length" = truncated output
+    usage,
+  };
 }
 
 async function streamGemini(events: AsyncGenerator<any>, onText?: (t: string) => void): Promise<any> {
   let text = "";
   const calls: { name: string; args: any }[] = [];
   const usage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
+  let finishReason = "";
 
   for await (const ev of events) {
     if (ev.usageMetadata) {
       usage.input_tokens = Number(ev.usageMetadata.promptTokenCount) || usage.input_tokens;
       usage.output_tokens = Number(ev.usageMetadata.candidatesTokenCount) || usage.output_tokens;
+      usage.cache_read_tokens = Number(ev.usageMetadata.cachedContentTokenCount) || usage.cache_read_tokens;
     }
+    if (ev.candidates?.[0]?.finishReason) finishReason = ev.candidates[0].finishReason;
     const parts = ev.candidates?.[0]?.content?.parts ?? [];
     for (const p of parts) {
       if (typeof p.text === "string" && p.text) {
@@ -676,7 +750,13 @@ async function streamGemini(events: AsyncGenerator<any>, onText?: (t: string) =>
   calls.forEach((c, i) =>
     content.push({ type: "tool_use", id: `gem_${c.name}_${i}_${Date.now()}`, name: c.name, input: c.args })
   );
-  return { content, stop_reason: content.some((c) => c.type === "tool_use") ? "tool_use" : "end_turn", usage };
+  return {
+    content,
+    stop_reason: content.some((c) => c.type === "tool_use")
+      ? "tool_use"
+      : finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn",
+    usage,
+  };
 }
 
 /* ------------------------------------------------------------------ */

@@ -5,15 +5,25 @@
 import { getDb } from "./db";
 import { callAiStream, AiTool, AiMessage } from "./ai";
 import { applyContextLimit } from "./context-limit";
-import { listMcpTools, callMcpTool, McpServerName } from "./mcp";
+import { listMcpTools, callMcpTool, getMcpStatus, McpServerName } from "./mcp";
 import { githubToolDefs, callGithubTool } from "./tools-github";
 import { tavilyToolDefs, callTavilyTool } from "./tools-tavily";
+import { videoToolDefs, callVideoTool, ffmpegAvailable } from "./tools-video";
 import { monitoringToolDefs, callMonitoringTool } from "./tools-monitoring";
 import { memoryRead, memoryWrite, memoryDelete, memoryList } from "./memory";
 import { databaseToolDefs, redisToolDefs, callDatabaseTool, callRedisTool, isReadOnlySql, redisWriteDetail } from "./tools-db";
 import { envToolDefs, callEnvTool, resolveEnvPath } from "./tools-env";
-import { shellToolDef, runShell, awaitApproval } from "./shell";
+import { shellToolDef, runShell, awaitApproval, shellCwd } from "./shell";
+import { awaitNetworkRetry, isNetworkError } from "./net-pause";
+import { setTodos, getTodos, todosPrompt, journalPrompt, logAssignment, TodoInput, RunTodo } from "./progress-db";
 import { cronToolDefs, callCronTool } from "./tools-cron";
+import { learningToolDefs, callLearningTool, learningPrompt, learningNotesPrompt } from "./tools-learning";
+import { withToolCache, invalidateAfter, RunToolMemo, CachedResult } from "./tool-cache";
+import { claimForWrite, releaseFileLocks, newLockOwnerId } from "./file-locks";
+import {
+  boardToolDefs, BOARD_PROMPT, boardPost, boardReadText, boardPromptNotes,
+  boardNotesSince, boardLastId, formatNotes,
+} from "./team-board";
 import { visionToolDef, callVisionTool } from "./tools-vision";
 import { awaitAnswer, AskOption } from "./ask";
 import { logger } from "./logger";
@@ -27,7 +37,7 @@ export type AgentRow = {
 };
 
 /** Action types that require user approval in chat before execution. */
-export type ApprovalKind = "shell" | "database" | "redis" | "env";
+export type ApprovalKind = "shell" | "database" | "redis" | "env" | "learning";
 
 /**
  * Execution mode (picked by the user in chat):
@@ -48,6 +58,7 @@ export type RunEvent =
   | { type: "ask_resolved"; id: string; answer: string }
   | { type: "delegate_start"; agent: string }
   | { type: "delegate_end"; agent: string }
+  | { type: "todos"; todos: RunTodo[] }
   | { type: "done"; finalText: string }
   | { type: "error"; message: string };
 
@@ -79,6 +90,30 @@ export interface RunOptions {
   interactive?: boolean;
   /** Label recorded with token usage for this run (defaults to "agent"). */
   usageSource?: string;
+  /**
+   * Working directory for shell commands in this run (Workspace "working
+   * folder"). Overrides the agent's own working_dir; inherited by delegated
+   * sub-agents.
+   */
+  workingDir?: string;
+  /**
+   * Conversation this run belongs to — enables the persistent progress
+   * checklist (progress_update tool + right-hand Progress panel) and the
+   * work journal, so the agent can pick up where it left off after a
+   * disconnect.
+   */
+  conversationId?: number;
+  /**
+   * Team board shared by agents working in parallel (`ws:<sessionId>` for a
+   * Workspace session, `task:<id>` for a Manager task). Enables board_post /
+   * board_read and pushes other agents' new notes into this run.
+   */
+  boardKey?: string;
+  /**
+   * File-lock owner — set once by the root run and inherited by delegated
+   * sub-agents, so a parent and its helpers share their file claims.
+   */
+  lockOwnerId?: string;
 }
 const PLAN_MSG =
   "Plan mode is active — the action was NOT executed. Explain to the user the plan/actions you intend to take; " +
@@ -92,7 +127,7 @@ async function requestApproval(
   detail: string
 ): Promise<boolean> {
   onEvent({ type: "approval_request", id, kind, detail });
-  const decision = await awaitApproval(id);
+  const decision = await awaitApproval(id, { kind, detail });
   if (decision === "always") {
     const { addAllowed } = await import("./allowlist");
     addAllowed(kind, detail);
@@ -120,6 +155,34 @@ async function gateRiskyAction(
   }
   return (await requestApproval(onEvent, id, kind, detail)) ? null : REJECTED_MSG;
 }
+
+/** Persistent checklist tool — the agent's own progress tracker per conversation. */
+const progressToolDef: AiTool = {
+  name: "progress_update",
+  description:
+    "Maintain your persistent progress checklist for this task. Send the COMPLETE list every time " +
+    "(it replaces the previous one): all planned steps with their current status. Use it right after " +
+    "planning a multi-step task, and update it immediately whenever a step is finished or started. " +
+    "The list survives disconnects — on a new run it is shown back to you so you can continue where you left off.",
+  input_schema: {
+    type: "object",
+    properties: {
+      todos: {
+        type: "array",
+        description: "the FULL checklist, in order",
+        items: {
+          type: "object",
+          properties: {
+            content: { type: "string", description: "short description of the step" },
+            status: { type: "string", enum: ["pending", "in_progress", "done"], description: "current status" },
+          },
+          required: ["content", "status"],
+        },
+      },
+    },
+    required: ["todos"],
+  },
+};
 
 const memoryToolDefs: AiTool[] = [
   {
@@ -200,7 +263,7 @@ function delegateToolDef(exceptAgentId: number): AiTool {
 
 async function assembleTools(agent: AgentRow): Promise<{
   defs: AiTool[];
-  route: Map<string, { kind: "mcp"; server: McpServerName; tool: string } | { kind: "github" } | { kind: "tavily" } | { kind: "memory" } | { kind: "delegate" } | { kind: "shell" } | { kind: "database" } | { kind: "redis" } | { kind: "env" } | { kind: "monitoring" } | { kind: "ask" } | { kind: "cron" } | { kind: "vision" }>;
+  route: Map<string, { kind: "mcp"; server: McpServerName; tool: string } | { kind: "github" } | { kind: "tavily" } | { kind: "video" } | { kind: "memory" } | { kind: "delegate" } | { kind: "shell" } | { kind: "database" } | { kind: "redis" } | { kind: "env" } | { kind: "monitoring" } | { kind: "ask" } | { kind: "cron" } | { kind: "vision" } | { kind: "progress" } | { kind: "learning" } | { kind: "board" }>;
   notices: string[];
 }> {
   const enabled: string[] = JSON.parse(agent.tools || "[]");
@@ -213,6 +276,12 @@ async function assembleTools(agent: AgentRow): Promise<{
       for (const d of githubToolDefs) { defs.push(d); route.set(d.name, { kind: "github" }); }
     } else if (t === "tavily") {
       for (const d of tavilyToolDefs) { defs.push(d); route.set(d.name, { kind: "tavily" }); }
+    } else if (t === "video") {
+      if (!ffmpegAvailable()) {
+        notices.push("Video tools skipped: ffmpeg is not installed (macOS: brew install ffmpeg).");
+      } else {
+        for (const d of videoToolDefs) { defs.push(d); route.set(d.name, { kind: "video" }); }
+      }
     } else if (t === "tavily_mcp") {
       // Tavily hosted remote MCP (Streamable HTTP) — tools prefixed to avoid
       // colliding with the built-in REST `tavily_*` tools above.
@@ -265,7 +334,13 @@ async function assembleTools(agent: AgentRow): Promise<{
     } else if (t === "gitlab" || t === "filesystem") {
       try {
         const tools = await listMcpTools(t as McpServerName);
-        if (tools.length === 0) notices.push(`Tool ${t} is unavailable — the answer was produced without it.`);
+        if (tools.length === 0) {
+          // Surface the REAL reason (e.g. "unconfigured: No allowed folders yet"
+          // or "error: server failed to start: …") instead of a bare "unavailable".
+          const st = getMcpStatus(t as McpServerName);
+          const why = st.detail ? ` (${st.status}: ${st.detail})` : "";
+          notices.push(`Tool ${t} is unavailable${why} — the answer was produced without it.`);
+        }
         for (const mt of tools) {
           const name = sanitizeToolName(`${t === "filesystem" ? "fs" : "gitlab"}_${mt.name}`);
           defs.push({ name, description: mt.description ?? mt.name, input_schema: mt.inputSchema ?? { type: "object", properties: {} } });
@@ -351,6 +426,24 @@ export async function runAgent(
   mode: RunMode = "approval",
   opts: RunOptions = {}
 ): Promise<string> {
+  // Delegated sub-agents inherit the root run's lock owner (and its claims).
+  if (opts.lockOwnerId) return runAgentLoop(agentId, history, onEvent, depth, mode, opts);
+  const lockOwnerId = newLockOwnerId();
+  try {
+    return await runAgentLoop(agentId, history, onEvent, depth, mode, { ...opts, lockOwnerId });
+  } finally {
+    await releaseFileLocks(lockOwnerId);
+  }
+}
+
+async function runAgentLoop(
+  agentId: number,
+  history: AiMessage[],
+  onEvent: (e: RunEvent) => void,
+  depth: number,
+  mode: RunMode,
+  opts: RunOptions
+): Promise<string> {
   const agent = getAgent(agentId);
   if (!agent) throw new Error("Agent not found.");
   logger.info(`Agent run started: "${agent.name}" (id=${agentId}, mode=${mode}, depth=${depth})`);
@@ -364,12 +457,86 @@ export async function runAgent(
     route.set(askUserToolDef.name, { kind: "ask" });
     for (const d of cronToolDefs) { defs.push(d); route.set(d.name, { kind: "cron" }); }
   }
+  // Self-learning: every agent can save its own memory, knowledge and skills.
+  for (const d of learningToolDefs) { defs.push(d); route.set(d.name, { kind: "learning" }); }
+  // Team board — only when this run is part of a multi-agent session/task.
+  if (opts.boardKey) {
+    for (const d of boardToolDefs) { defs.push(d); route.set(d.name, { kind: "board" }); }
+  }
+  // Persistent progress checklist — available whenever the run belongs to a conversation.
+  if (opts.conversationId && depth === 0) {
+    defs.push(progressToolDef);
+    route.set(progressToolDef.name, { kind: "progress" });
+  }
+
+  // Auto-memory: record what the user asked and in which folder, so the agent
+  // never loses track of its assignments across sessions.
+  if (depth === 0 && opts.interactive) {
+    const lastUser = [...history].reverse().find((m) => m.role === "user");
+    const reqText = typeof lastUser?.content === "string"
+      ? lastUser.content
+      : Array.isArray(lastUser?.content)
+        ? (lastUser!.content as any[]).filter((b) => b?.type === "text").map((b) => b.text).join(" ")
+        : "";
+    if (reqText.trim()) {
+      try { logAssignment(agentId, reqText, shellCwd(agentId, opts.workingDir), opts.conversationId); } catch { /* best-effort */ }
+    }
+  }
 
 
   const messages: AiMessage[] = [...history];
   let finalText = "";
+  // Truncated-output recovery: when a reply is cut off by the token limit,
+  // `carry` keeps the text produced so far so the continuation appends to it
+  // (in the UI stream and in the saved answer) instead of replacing it.
+  let carry = "";
+  let autoContinues = 0;
+  let checklistNudges = 0;
+  const MAX_AUTO_CONTINUES = 6;
+  const MAX_CHECKLIST_NUDGES = 2;
 
-  let system = buildSystemPrompt(agent);
+  // Prompt caching: `system` holds text that stays identical across runs and
+  // across the iterations of this run (cached by the provider). Anything that
+  // changes from run to run goes in `systemDynamic`, sent after it.
+  let system = buildSystemPrompt(agent) + learningPrompt();
+  let systemDynamic = "";
+  // Agents that can write files / run commands must EXECUTE build tasks, not
+  // stop after reading inputs and replying with a summary (classic failure:
+  // "read the PRD, answered with a plan, built nothing").
+  const canBuild = [...route.keys()].some((n) => n.startsWith("fs_") || n === "run_shell");
+  if (canBuild && mode !== "plan") {
+    system +=
+      "\n\n# Execution discipline\n" +
+      "When the user asks you to BUILD or IMPLEMENT something (a website, app, script — e.g. from a PRD/PLAN file), " +
+      "you must produce the actual artifacts in this run using your tools: create directories and write every needed file " +
+      "(fs_write_file), run setup/build commands (run_shell) when available, and verify the result. " +
+      "Reading the input files and replying with a summary, outline or promise is NOT task completion. " +
+      "Work file by file and keep calling tools until the deliverable exists; only stop early to ask the user when you are " +
+      "genuinely blocked on a decision you cannot make yourself.";
+  }
+  if (opts.workingDir) {
+    system +=
+      `\n\n# Working directory\nShell commands in this session run in: ${opts.workingDir}\n` +
+      "Treat this folder as the project root for relative paths.";
+  }
+  // Memory of past assignments + the persistent checklist: shown at every run
+  // start so the agent knows what it was doing even after a disconnect.
+  if (depth === 0) {
+    const journal = journalPrompt(agentId);
+    if (journal) {
+      systemDynamic +=
+        "\n\n# Recent assignments (auto-memory)\nYour latest assignments and their folders — use these to stay oriented:\n" + journal;
+    }
+    if (opts.conversationId) {
+      const checklist = todosPrompt(opts.conversationId);
+      systemDynamic += checklist
+        ? "\n\n# Progress checklist (persisted)\nCurrent state of your checklist for this task ([x]=done, [~]=in progress, [ ]=pending):\n" +
+          checklist +
+          "\nContinue with the unfinished items — do NOT restart completed work. Keep it updated via progress_update."
+        : "\n\n# Progress checklist\nFor any multi-step task, plan your steps and record them with the progress_update tool, " +
+          "then keep every status current as you work. This checklist is your recovery point if the session is interrupted.";
+    }
+  }
   if (mode === "plan") {
     system +=
       "\n\n# Plan mode\nThe user selected Plan mode: do NOT execute actions that change the system " +
@@ -398,28 +565,71 @@ export async function runAgent(
       "NEVER claim you cannot see images — even if earlier messages in this conversation say so, " +
       "the read_image tool is available NOW and overrides those earlier statements.";
   }
+  if (opts.boardKey) {
+    system += BOARD_PROMPT;
+    systemDynamic += boardPromptNotes(opts.boardKey);
+  }
+  systemDynamic += learningNotesPrompt(agent.id);
+  systemDynamic = systemDynamic.trim();
+  // Board notes up to here are in the prompt; newer ones get pushed in later.
+  let boardSeenId = opts.boardKey ? boardLastId(opts.boardKey) : 0;
+
+  // Shared tool-result cache + per-run de-dup (lib/tool-cache.ts). `lastSent`
+  // is what the model last received, so a de-dup note never points at a
+  // result the context limit already trimmed away.
+  let lastSent: AiMessage[] = messages;
+  const toolMemo = new RunToolMemo((toolUseId) =>
+    lastSent.some((m) => Array.isArray(m.content) &&
+      m.content.some((b: any) => b?.type === "tool_result" && b.tool_use_id === toolUseId))
+  );
 
   let iter = 0;
   for (; iter < MAX_LOOP_ITERATIONS; iter++) {
     // Optional context cap: drop the oldest turns when the history grows past
     // the configured token budget (Settings → Context limit).
-    const { messages: sendMessages, trimmed } = applyContextLimit(system, messages);
+    const { messages: sendMessages, trimmed } = applyContextLimit(system + systemDynamic, messages);
+    lastSent = sendMessages;
     if (trimmed > 0) {
       onEvent({ type: "system_notice", text: `Context limit: trimmed ${trimmed} older message(s) to stay under the token budget.` });
     }
-    const resp = await callAiStream({
-      system,
-      messages: sendMessages,
-      tools: defs,
-      model: opts.modelOverride ?? agent.model_override ?? undefined,
-      usageSource: opts.usageSource ?? "agent",
-      // stream partial text to the chatbox as the AI generates it
-      onText: (t) => onEvent({ type: "text", text: t }),
-    });
+    // On a NETWORK failure (offline, DNS, refused) the run PAUSES instead of
+    // dying — it waits for the user to press Retry on the notification card,
+    // then re-issues the same AI call. API errors (bad key, 4xx/5xx) still throw.
+    let resp!: Awaited<ReturnType<typeof callAiStream>>;
+    for (;;) {
+      try {
+        resp = await callAiStream({
+          system,
+          systemDynamic,
+          messages: sendMessages,
+          tools: defs,
+          model: opts.modelOverride ?? agent.model_override ?? undefined,
+          usageSource: opts.usageSource ?? "agent",
+          // stream partial text to the chatbox as the AI generates it
+          // (prefixed with `carry` so a continued-after-truncation reply appends)
+          onText: (t) => onEvent({ type: "text", text: carry + t }),
+        });
+        break;
+      } catch (e: any) {
+        if (!isNetworkError(e)) throw e;
+        const reason = String(e?.message ?? e);
+        logger.error(`Agent "${agent.name}": network error — run paused, waiting for the user to retry. (${reason})`);
+        onEvent({
+          type: "system_notice",
+          text: "⚠ Connection lost — the run is paused. Press Retry on the notification card (or Cancel to stop).",
+        });
+        const { decision } = awaitNetworkRetry(agent.name, reason);
+        const action = await decision;
+        if (action === "cancel") {
+          throw new Error(`Run stopped while offline: ${reason}`);
+        }
+        onEvent({ type: "system_notice", text: "Connection retry requested — resuming the run…" });
+      }
+    }
 
     const textParts = (resp.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text);
     if (textParts.length) {
-      finalText = textParts.join("\n");
+      finalText = carry + textParts.join("\n");
       onEvent({ type: "text", text: finalText });
     }
 
@@ -441,7 +651,57 @@ export async function runAgent(
       }
     }
 
-    if (resp.stop_reason !== "tool_use") break;
+    if (resp.stop_reason !== "tool_use") {
+      // (a) Reply was CUT OFF by the output-token limit — auto-continue in the
+      // same run instead of pretending the task is complete.
+      if (resp.stop_reason === "max_tokens" && autoContinues < MAX_AUTO_CONTINUES) {
+        autoContinues++;
+        carry = finalText; // already includes previous carry
+        messages.push({
+          role: "assistant",
+          content: (resp.content?.length ? resp.content : [{ type: "text", text: finalText || "…" }]) as any,
+        });
+        messages.push({
+          role: "user",
+          content:
+            "[system] Your previous reply was CUT OFF by the output-token limit mid-way. " +
+            "Continue EXACTLY where you stopped — do not repeat any earlier text, do not apologize, just continue.",
+        });
+        logger.warn(`Agent "${agent.name}": output truncated (max_tokens) — auto-continuing (${autoContinues}/${MAX_AUTO_CONTINUES}).`);
+        onEvent({ type: "system_notice", text: "Output hit the token limit — continuing automatically…" });
+        continue;
+      }
+      if (resp.stop_reason === "max_tokens") {
+        onEvent({ type: "system_notice", text: "Output hit the token limit repeatedly — stopped. Say 'continue' to resume." });
+      }
+
+      // (b) The model ended its turn while the progress checklist still has
+      // unfinished items — nudge it to keep working instead of completing.
+      if (depth === 0 && opts.conversationId && mode !== "plan" && checklistNudges < MAX_CHECKLIST_NUDGES) {
+        const open = getTodos(opts.conversationId).filter((t) => t.status !== "done");
+        if (open.length > 0) {
+          checklistNudges++;
+          carry = ""; // the nudged reply is a fresh answer, not a continuation
+          messages.push({
+            role: "assistant",
+            content: (resp.content?.length ? resp.content : [{ type: "text", text: finalText || "…" }]) as any,
+          });
+          messages.push({
+            role: "user",
+            content:
+              `[system] Your progress checklist still has ${open.length} unfinished item(s):\n` +
+              open.map((t) => `- [${t.status}] ${t.content}`).join("\n") +
+              "\nThe task is NOT complete. Continue working on these items NOW using your tools. " +
+              "If an item is actually finished or no longer applies, update it via progress_update. " +
+              "Only give your final answer when every item is done, or after asking the user via ask_user when you are truly blocked.",
+          });
+          logger.warn(`Agent "${agent.name}": ended turn with ${open.length} open checklist item(s) — nudging to continue (${checklistNudges}/${MAX_CHECKLIST_NUDGES}).`);
+          onEvent({ type: "system_notice", text: `Checklist has ${open.length} unfinished item(s) — telling the agent to continue…` });
+          continue;
+        }
+      }
+      break;
+    }
 
     messages.push({ role: "assistant", content: resp.content });
     const results: any[] = [];
@@ -450,19 +710,56 @@ export async function runAgent(
       onEvent({ type: "tool_call", tool: block.name, args: block.input });
       let resultStr = "";
       let isError = false;
+      let cacheInfo: Pick<CachedResult, "key" | "source"> = { key: null, source: "live" };
+      // Read-only tools go through the shared cache (no-op for uncacheable calls).
+      const cached = async (exec: () => Promise<string>): Promise<string> => {
+        const c = await withToolCache(block.name, block.input, exec);
+        cacheInfo = c;
+        return c.result;
+      };
       const r = route.get(block.name);
       try {
         if (!r) throw new Error("Unknown tool.");
         if (r.kind === "github") {
-          resultStr = await callGithubTool(block.name, block.input);
+          resultStr = await cached(() => callGithubTool(block.name, block.input));
         } else if (r.kind === "tavily") {
           // Read-only web search/extract/crawl/map — no approval gating needed.
-          resultStr = await callTavilyTool(block.name, block.input);
+          resultStr = await cached(() => callTavilyTool(block.name, block.input));
         } else if (r.kind === "monitoring") {
           // Read-only queries (PromQL/LogQL/Grafana search) — no approval gating needed.
           resultStr = await callMonitoringTool(block.name, block.input);
+        } else if (r.kind === "progress") {
+          const items: TodoInput[] = Array.isArray((block.input as any)?.todos) ? (block.input as any).todos : [];
+          const todos = setTodos(opts.conversationId!, items);
+          onEvent({ type: "todos", todos });
+          resultStr = `Checklist saved (${todos.length} item(s), ${todos.filter((t) => t.status === "done").length} done).`;
+        } else if (r.kind === "video") {
+          // ffmpeg via execFile with an args array (no shell) — outputs are new
+          // files next to the input, so no approval gating needed.
+          resultStr = await callVideoTool(block.name, block.input, shellCwd(agentId, opts.workingDir));
         } else if (r.kind === "mcp") {
-          resultStr = await callMcpTool(r.server, r.tool, block.input);
+          // Writes claim the file for this run; another run's claim blocks them.
+          if (r.server === "filesystem") {
+            const blocked = await claimForWrite({ id: opts.lockOwnerId!, agentName: agent.name }, block.name, block.input);
+            if (blocked) throw new Error(blocked);
+          }
+          resultStr = await cached(() => callMcpTool(r.server, r.tool, block.input));
+        } else if (r.kind === "board") {
+          if (block.name === "board_post") {
+            boardPost(opts.boardKey!, agent.id, agent.name, (block.input as any)?.note);
+            resultStr = "Posted to the team board.";
+          } else {
+            resultStr = await boardReadText(opts.boardKey!);
+          }
+        } else if (r.kind === "learning") {
+          // Changes to data the agent did not create (user's knowledge/skills,
+          // shared memory) go through the same approval gate as other risky actions.
+          resultStr = await callLearningTool(
+            { id: agent.id, name: agent.name },
+            block.name,
+            block.input,
+            (detail) => gateRiskyAction(mode, onEvent, block.id, "learning", detail)
+          );
         } else if (r.kind === "memory") {
           const inp: any = block.input;
           if (block.name === "memory_read") resultStr = memoryRead(inp.key, agent.id, agent.name) ?? "(empty)";
@@ -487,13 +784,13 @@ export async function runAgent(
             : null;
           resultStr = denied ?? (await callRedisTool(block.name, block.input));
         } else if (r.kind === "env") {
-          const file = resolveEnvPath((block.input as any)?.filename);
+          const file = resolveEnvPath((block.input as any)?.filename, agentId, opts.workingDir);
           const denied = await gateRiskyAction(mode, onEvent, block.id, "env", `read ${file}`);
-          resultStr = denied ?? (await callEnvTool(block.name, block.input));
+          resultStr = denied ?? (await callEnvTool(block.name, block.input, agentId, opts.workingDir));
         } else if (r.kind === "shell") {
           const cmd = String((block.input as any).command ?? "");
           const denied = await gateRiskyAction(mode, onEvent, block.id, "shell", cmd);
-          resultStr = denied ?? (await runShell(cmd, agentId));
+          resultStr = denied ?? (await runShell(cmd, agentId, opts.workingDir));
         } else if (r.kind === "ask") {
           const inp: any = block.input;
           const options: AskOption[] = Array.isArray(inp?.options)
@@ -523,13 +820,26 @@ export async function runAgent(
         isError = true;
         resultStr = String(e?.message ?? e);
       }
-      onEvent({ type: "tool_result", tool: block.name, ok: !isError, preview: resultStr.slice(0, 200) });
+      if (!isError) {
+        await invalidateAfter(block.name);
+        resultStr = toolMemo.dedupe(block.name, cacheInfo.key, block.id, resultStr);
+      }
+      const cacheTag = cacheInfo.source === "live" ? "" : "(cached) ";
+      onEvent({ type: "tool_result", tool: block.name, ok: !isError, preview: cacheTag + resultStr.slice(0, 200) });
       results.push({
         type: "tool_result",
         tool_use_id: block.id,
         content: resultStr.slice(0, 50_000),
         ...(isError ? { is_error: true } : {}),
       });
+    }
+    // Push notes other agents posted on the team board since we last looked.
+    if (opts.boardKey) {
+      const fresh = boardNotesSince(opts.boardKey, boardSeenId, agent.id);
+      if (fresh.length) {
+        results.push({ type: "text", text: `[Team board — new notes from other agents]\n${formatNotes(fresh)}` });
+        boardSeenId = fresh[fresh.length - 1].id;
+      }
     }
     messages.push({ role: "user", content: results });
   }

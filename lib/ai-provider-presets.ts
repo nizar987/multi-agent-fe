@@ -152,8 +152,9 @@ export const AI_PROVIDER_PRESETS: AiProviderPreset[] = [
     format: "openai",
     baseUrl: "https://integrate.api.nvidia.com/v1",
     apiKeyUrl: "https://build.nvidia.com/settings/api-keys",
-    models: ["deepseek-ai/deepseek-r1", "meta/llama-3.3-70b-instruct", "qwen/qwen3-235b-a22b"],
+    models: ["openai/gpt-oss-120b", "deepseek-ai/deepseek-r1", "meta/llama-3.3-70b-instruct", "qwen/qwen3-235b-a22b"],
     free: true,
+    note: "openai/gpt-oss-120b supports reasoning_content for chain-of-thought outputs.",
   },
   {
     id: "siliconflow",

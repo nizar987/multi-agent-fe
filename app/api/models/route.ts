@@ -8,6 +8,7 @@ import { listModels, listModelsFor, detectProvider, AiProvider } from "@/lib/ai"
 import { listByKind } from "@/lib/connections-db";
 import { getConnectionSecret } from "@/lib/config";
 import { setModelRoutes, ModelRoute } from "@/lib/model-routes";
+import { getModelsCache, setModelsCache } from "@/lib/model-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -15,13 +16,6 @@ interface ModelGroup {
   name: string;
   active: boolean;
   models: string[];
-  /** Hidden from the regular model dropdown (still routed & selectable as vision model). */
-  hidden?: boolean;
-}
-
-/** NVIDIA NIM is used only as the vision backend — keep its models out of the chat dropdown. */
-function isHiddenConnection(baseUrl: string): boolean {
-  return /nvidia\.com/i.test(baseUrl);
 }
 interface ModelsResponse {
   ok: boolean;
@@ -30,11 +24,11 @@ interface ModelsResponse {
   error?: string;
 }
 
-let cache: { at: number; data: ModelsResponse } | null = null;
 const TTL_MS = 60_000;
 
 export async function GET() {
-  if (cache && Date.now() - cache.at < TTL_MS) return NextResponse.json(cache.data);
+  const cached = getModelsCache();
+  if (cached && Date.now() - cached.at < TTL_MS) return NextResponse.json(cached.data);
 
   const conns = listByKind("ai");
 
@@ -45,7 +39,7 @@ export async function GET() {
       ...d,
       groups: d.ok ? [{ name: "AI Provider", active: true, models: d.models }] : [],
     };
-    if (d.ok) cache = { at: Date.now(), data };
+    if (d.ok) setModelsCache({ at: Date.now(), data });
     return NextResponse.json(data);
   }
 
@@ -61,6 +55,20 @@ export async function GET() {
       const provider: AiProvider = ["anthropic", "openai", "gemini"].includes(cfg.provider)
         ? cfg.provider
         : detectProvider(baseUrl);
+
+      // NVIDIA NIM: skip API fetch — use the models[] array stored in config.
+      // Fall back to single cfg.model for connections saved before multi-select.
+      const isNvidia = baseUrl.toLowerCase().includes("nvidia.com");
+      if (isNvidia) {
+        let nimModels: string[] = [];
+        if (Array.isArray(cfg.models) && cfg.models.length > 0) {
+          nimModels = cfg.models.map((m: any) => String(m).trim()).filter(Boolean);
+        } else if (cfg.model) {
+          nimModels = [String(cfg.model).trim()].filter(Boolean);
+        }
+        return { conn: c, baseUrl, provider, ok: nimModels.length > 0, models: nimModels };
+      }
+
       const apiKey = getConnectionSecret(c.id);
       if (!apiKey) return { conn: c, baseUrl, provider, ok: false as const, models: [] as string[] };
       const r = await listModelsFor({ baseUrl, apiKey, provider });
@@ -75,15 +83,13 @@ export async function GET() {
     for (const m of r.models) {
       routeMap[m] = { connId: r.conn.id, baseUrl: r.baseUrl, provider: r.provider };
     }
-    const hidden = isHiddenConnection(r.baseUrl);
-    groups.push({ name: r.conn.name, active: !!r.conn.is_active, models: r.models, ...(hidden ? { hidden } : {}) });
+    groups.push({ name: r.conn.name, active: !!r.conn.is_active, models: r.models });
   }
   setModelRoutes(routeMap);
 
   // Flat list: active connection's models first, then the rest, deduplicated.
-  // Hidden (vision-only) connections stay out of the flat chat-model list.
   groups.sort((a, b) => Number(b.active) - Number(a.active));
-  const flat = [...new Set(groups.filter((g) => !g.hidden).flatMap((g) => g.models))];
+  const flat = [...new Set(groups.flatMap((g) => g.models))];
 
   const data: ModelsResponse = {
     ok: groups.length > 0,
@@ -91,6 +97,6 @@ export async function GET() {
     groups,
     ...(groups.length === 0 ? { error: "No AI connection returned a model list." } : {}),
   };
-  if (data.ok) cache = { at: Date.now(), data };
+  if (data.ok) setModelsCache({ at: Date.now(), data });
   return NextResponse.json(data);
 }

@@ -12,6 +12,7 @@ import AttachmentBar from "@/components/AttachmentBar";
 import ConnectorModal from "@/components/ConnectorModal";
 import ModelSelect from "@/components/ModelSelect";
 import MessageBody, { ThinkingIndicator, ToolProgress } from "@/components/MessageBody";
+import ProgressPanel, { Todo } from "@/components/ProgressPanel";
 import { PickedAttachment, toWire, parseStoredMessage } from "@/components/attachments-client";
 
 type MsgAttachment = { name: string; kind: string; previewUrl?: string };
@@ -42,7 +43,10 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
   const [model, setModel] = useState("");
   const [workingDir, setWorkingDir] = useState<string | null>(null);
   const [pickingFolder, setPickingFolder] = useState(false);
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [progressOpen, setProgressOpen] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null); // MAJOR-1: SSE cleanup
 
   // open a URL or file path in the preview panel — called by link clicks in MessageBody
   const openPreview = (href: string) => {
@@ -62,6 +66,44 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
     }
   };
 
+  // Load the persisted checklist whenever the conversation changes.
+  useEffect(() => {
+    if (!convId) { setTodos([]); return; }
+    fetch(`/api/todos?conversationId=${convId}`)
+      .then((r) => r.json())
+      .then((d) => setTodos(Array.isArray(d) ? d : []))
+      .catch(() => setTodos([]));
+  }, [convId]);
+
+  // Declare newConv first — loadConvs depends on it (MAJOR-5 fix: correct declaration order)
+  const newConv = useCallback(async () => {
+    const r = await fetch(`/api/agents/${agentId}/conversations`, { method: "POST" }).then((r) => r.json());
+    setConvId(r.id);
+    setItems([]);
+    fetch(`/api/agents/${agentId}/conversations`).then((r) => r.json()).then(setConvs);
+  }, [agentId]);
+
+  // MAJOR-5: stable reference — selectConv doesn't close over mutable state
+  const selectConv = useCallback(async (id: number) => {
+    setConvId(id);
+    const msgs = await fetch(`/api/conversations/${id}/messages`).then((r) => r.json());
+    setItems(msgs.filter((m: any) => m.role === "user" || m.role === "assistant")
+      .map((m: any) => {
+        if (m.role === "user") {
+          const { text, atts } = parseStoredMessage(m.content, m.meta);
+          return { kind: "msg", role: "user", content: text, atts: atts.length ? atts : undefined };
+        }
+        return { kind: "msg", role: "assistant", content: m.content };
+      }));
+  }, []);
+
+  const loadConvs = useCallback(async () => {
+    const cs = await fetch(`/api/agents/${agentId}/conversations`).then((r) => r.json());
+    setConvs(cs);
+    if (cs.length > 0) selectConv(cs[0].id);
+    else newConv();
+  }, [agentId, selectConv, newConv]);
+
   useEffect(() => {
     fetch(`/api/agents/${agentId}`).then((r) => r.json()).then((a) => {
       setAgent(a);
@@ -69,36 +111,9 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
     });
     fetch("/api/settings").then((r) => r.json()).then((s) => setNeedsKey(!s.secrets.aiApiKey.set));
     loadConvs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
-
-  const loadConvs = async () => {
-    const cs = await fetch(`/api/agents/${agentId}/conversations`).then((r) => r.json());
-    setConvs(cs);
-    if (cs.length > 0) selectConv(cs[0].id);
-    else newConv();
-  };
-
-  const selectConv = async (id: number) => {
-    setConvId(id);
-    const msgs = await fetch(`/api/conversations/${id}/messages`).then((r) => r.json());
-    setItems(msgs.filter((m: any) => m.role === "user" || m.role === "assistant")
-      .map((m: any) => {
-        if (m.role === "user") {
-          // Rebuild attachment chips/thumbnails from the stored message.
-          const { text, atts } = parseStoredMessage(m.content, m.meta);
-          return { kind: "msg", role: "user", content: text, atts: atts.length ? atts : undefined };
-        }
-        return { kind: "msg", role: "assistant", content: m.content };
-      }));
-  };
-
-  const newConv = useCallback(async () => {
-    const r = await fetch(`/api/agents/${agentId}/conversations`, { method: "POST" }).then((r) => r.json());
-    setConvId(r.id);
-    setItems([]);
-    fetch(`/api/agents/${agentId}/conversations`).then((r) => r.json()).then(setConvs);
-  }, [agentId]);
+    // Cleanup: abort any in-flight SSE stream when agentId changes (MAJOR-1)
+    return () => { abortRef.current?.abort(); };
+  }, [agentId, loadConvs]);
 
   const deleteConv = async () => {
     if (!convId || busy) return;
@@ -131,11 +146,17 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
     setItems((p) => [...p, { kind: "msg", role: "user", content: text, atts: msgAtts.length ? msgAtts : undefined }]);
     setBusy(true);
 
+    // MAJOR-1: cancel any previous in-flight stream, create fresh controller
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ conversationId: convId, message: text, mode: runMode, attachments: atts.map(toWire), model: model || undefined }),
+        signal: controller.signal,
       });
       if (res.status === 428) { setNeedsKey(true); setBusy(false); return; }
       if (!res.ok || !res.body) throw new Error(await res.text());
@@ -218,6 +239,9 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
                   break;
                 }
               }
+            } else if (ev.type === "todos") {
+              setTodos(Array.isArray(ev.todos) ? ev.todos : []);
+              setProgressOpen(true);
             } else if (ev.type === "system_notice") {
               next.push({ kind: "notice", text: ev.text });
             } else if (ev.type === "delegate_start") {
@@ -246,6 +270,8 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
       }
       if (runMode === "plan") setPlanReady(true);
     } catch (e: any) {
+      // MAJOR-1: AbortError means user navigated away — don't update state
+      if (e.name === "AbortError") return;
       setItems((p) => [...p, { kind: "notice", text: `Error: ${e.message}` }]);
     } finally {
       setBusy(false);
@@ -327,7 +353,7 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
         <div className="chat-header">
           <div className="chat-header-row">
             <Link href="/" className="chat-back muted" title="Back">←</Link>
-            <AgentAvatar avatar={agent?.avatar} color={agent?.color} size={28} working={busy} />
+            <AgentAvatar avatar={agent?.avatar} color={agent?.color} size={28} working={busy} name={agent?.name} />
             <div className="chat-header-title">
               <strong>{agent?.name ?? "…"}</strong>
               {agent?.description && (
@@ -353,6 +379,12 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
               title="Delete this conversation"
               aria-label="Delete conversation"
             >🗑</button>
+            <button
+              className={`btn btn-icon${progressOpen && todos.length > 0 ? " active" : ""}`}
+              onClick={() => setProgressOpen((v) => !v)}
+              title={todos.length > 0 ? `Progress: ${todos.filter((t) => t.status === "done").length}/${todos.length} done` : "No checklist yet"}
+              disabled={todos.length === 0}
+            >☑</button>
             <button
               className={`btn btn-icon${previewTarget ? " active" : ""}`}
               onClick={() => setPreviewTarget((v) => v ? null : v)}
@@ -490,6 +522,11 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
           </div>
         </div>
       </div>
+
+      {/* progress checklist — the agent's persistent todo list for this conversation */}
+      {progressOpen && todos.length > 0 && (
+        <ProgressPanel todos={todos} onClose={() => setProgressOpen(false)} />
+      )}
 
       {/* panel preview — only shown when user explicitly clicks a link */}
       <PreviewPanel

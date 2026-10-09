@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import ModelSelect from "@/components/ModelSelect";
+import FolderPicker from "@/components/FolderPicker";
 
 type ToolStatus = { status: "connected" | "unconfigured" | "error" | "connecting"; detail: string };
 
@@ -19,6 +20,7 @@ const TOOL_LABELS: Record<string, string> = {
   database: "Database (SQL query)",
   redis: "Redis",
   monitoring: "Monitoring (Grafana / Prometheus / Loki)",
+  video: "Video editing (ffmpeg: trim / concat / subtitles / transcribe)",
   env: "Read .env file",
 };
 
@@ -46,9 +48,7 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
   const [saving, setSaving] = useState(false);
   const [avatar, setAvatar] = useState("🤖");
   const [color, setColor] = useState("#c15f3c");
-  const [workingDir, setWorkingDir] = useState<string | null>(null);
-  const [pickingFolder, setPickingFolder] = useState(false);
-  const [folderError, setFolderError] = useState<string | null>(null);
+  const [workingDir, setWorkingDir] = useState<string>("");
 
   useEffect(() => {
     fetch("/api/skills").then((r) => r.json()).then(setSkills);
@@ -70,7 +70,7 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
         setSkillIds(JSON.parse(a.skill_ids || "[]"));
         setAvatar(a.avatar ?? "🤖");
         setColor(a.color ?? "#c15f3c");
-        setWorkingDir(a.working_dir ?? null);
+        setWorkingDir(a.working_dir ?? "");
       });
     }
   }, [agentId]);
@@ -78,30 +78,15 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
   const toggle = (t: string) =>
     setTools((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
-  const pickFolder = async () => {
+  const handleWorkingDirChange = async (dir: string) => {
+    setWorkingDir(dir);
     if (!agentId) return;
-    setPickingFolder(true);
-    setFolderError(null);
-    try {
-      const r = await fetch(`/api/agents/${agentId}/pick-folder`, { method: "POST" });
-      if (r.status === 501) {
-        const j = await r.json();
-        setFolderError(j.error);
-        return;
-      }
-      const j = await r.json();
-      if (!j.canceled) setWorkingDir(j.folder);
-    } catch {
-      setFolderError("Failed to open folder dialog.");
-    } finally {
-      setPickingFolder(false);
-    }
-  };
-
-  const clearFolder = async () => {
-    if (!agentId) return;
-    await fetch(`/api/agents/${agentId}/pick-folder`, { method: "DELETE" });
-    setWorkingDir(null);
+    // Persist immediately via PATCH so it survives without hitting Save
+    await fetch(`/api/agents/${agentId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ working_dir: dir || null }),
+    });
   };
 
   const save = async () => {
@@ -197,7 +182,7 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
             </div>
           );
         })}
-        {["memory", "delegate", "vision"].map((t) => (
+        {["memory", "delegate", "vision", "video"].map((t) => (
           <div key={t} className="tool-status-row">
             <input type="checkbox" id={`tool-${t}`} checked={tools.includes(t)} onChange={() => toggle(t)} />
             <span className="dot dot-green" />
@@ -264,43 +249,12 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
             </span>
           )}
         </div>
-
-        {workingDir ? (
-          <div className="list-row">
-            <span>📁</span>
-            <div className="grow path-truncate" title={workingDir}>{workingDir}</div>
-            <button
-              className="btn"
-              onClick={pickFolder}
-              disabled={!agentId || pickingFolder}
-            >
-              {pickingFolder ? <><span className="spinner" /> Opening…</> : "Change…"}
-            </button>
-            <button
-              className="btn btn-danger-ghost"
-              onClick={clearFolder}
-              disabled={!agentId}
-              title="Remove working directory (reverts to global default)"
-            >
-              Remove
-            </button>
-          </div>
-        ) : (
-          <button
-            className="btn"
-            onClick={pickFolder}
-            disabled={!agentId || pickingFolder}
-            title={!agentId ? "Save the agent first" : undefined}
-          >
-            {pickingFolder
-              ? <><span className="spinner" /> Opening…</>
-              : "📂 Open folder…"}
-          </button>
-        )}
-
-        {folderError && (
-          <div className="error-text" style={{ marginTop: 6 }}>{folderError}</div>
-        )}
+        <FolderPicker
+          value={workingDir}
+          onChange={handleWorkingDirChange}
+          placeholder="📂 Select folder…"
+          disabled={!agentId}
+        />
       </div>
 
       <div className="row">

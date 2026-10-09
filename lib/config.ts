@@ -82,17 +82,32 @@ export function getConfig(): AppConfig {
   }
 }
 
-export function updateConfig(patch: Partial<AppConfig>): AppConfig {
+/**
+ * A patch may set only SOME fields of a section — every section below is
+ * merged onto the current value, so `{ ai: { model } }` keeps baseUrl,
+ * provider and visionModel untouched. Callers must never be forced to send a
+ * whole section just to change one field.
+ */
+export type ConfigPatch = {
+  [K in keyof AppConfig]?: AppConfig[K] extends object
+    ? AppConfig[K] extends unknown[]
+      ? AppConfig[K]
+      : Partial<AppConfig[K]>
+    : AppConfig[K];
+};
+
+export function updateConfig(patch: ConfigPatch): AppConfig {
+  const current = getConfig();
   const merged: AppConfig = {
-    ...getConfig(),
+    ...current,
     ...patch,
-    ai: { ...getConfig().ai, ...(patch.ai ?? {}) },
-    gitlab: { ...getConfig().gitlab, ...(patch.gitlab ?? {}) },
-    database: { ...getConfig().database, ...(patch.database ?? {}) },
-    redis: { ...getConfig().redis, ...(patch.redis ?? {}) },
-    filesystem: { ...getConfig().filesystem, ...(patch.filesystem ?? {}) },
-    context: { ...getConfig().context, ...(patch.context ?? {}) },
-    ui: { ...getConfig().ui, ...(patch.ui ?? {}) },
+    ai: { ...current.ai, ...(patch.ai ?? {}) },
+    gitlab: { ...current.gitlab, ...(patch.gitlab ?? {}) },
+    database: { ...current.database, ...(patch.database ?? {}) },
+    redis: { ...current.redis, ...(patch.redis ?? {}) },
+    filesystem: { ...current.filesystem, ...(patch.filesystem ?? {}) },
+    context: { ...current.context, ...(patch.context ?? {}) },
+    ui: { ...current.ui, ...(patch.ui ?? {}) },
   };
   fs.writeFileSync(configFile(), JSON.stringify(merged, null, 2));
   configEvents.emit("config-changed", merged);

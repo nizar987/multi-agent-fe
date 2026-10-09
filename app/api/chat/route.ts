@@ -62,22 +62,46 @@ export async function POST(req: NextRequest) {
     .map(rowToAiMessage);
 
   const encoder = new TextEncoder();
+  // The run must SURVIVE the page being closed: `send` swallows enqueue
+  // errors after the client disconnects, runAgent keeps working in the
+  // background and the final answer is still saved to the conversation.
+  let clientGone = false;
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (e: RunEvent) =>
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
+      const send = (e: RunEvent) => {
+        if (clientGone) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
+        } catch {
+          clientGone = true; // stream cancelled — keep running, drop events
+        }
+      };
       try {
         logger.info(`Chat started: conv=${conversationId}, agent=${conv.agent_id}, mode=${mode}`);
-        const finalText = await runAgent(conv.agent_id, history, send, 0, mode, { interactive: true, ...(modelOverride ? { modelOverride } : {}) });
+        const finalText = await runAgent(conv.agent_id, history, send, 0, mode, { interactive: true, conversationId, ...(modelOverride ? { modelOverride } : {}) });
         db.prepare("INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)")
           .run(conversationId, "assistant", finalText || "(no answer)");
         send({ type: "done", finalText });
       } catch (e: any) {
         logger.error(`Chat error: conv=${conversationId}`, e);
-        send({ type: "error", message: String(e?.message ?? e) });
+        // 🟠 MAJOR: Do NOT send raw stack trace / internal error message to client.
+        // The full error is persisted to the log file via logger.error above.
+        // Only send a generic message unless it's a user-facing AiConfigError.
+        const { AiConfigError } = await import("@/lib/ai");
+        const isConfigError = e instanceof AiConfigError;
+        const clientMessage = isConfigError
+          ? String(e?.message ?? e)
+          : "An internal error occurred. Check the logs for details.";
+        // Persist a brief error note to the conversation so it's visible on reopen.
+        db.prepare("INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)")
+          .run(conversationId, "assistant", `Error: ${clientMessage}`);
+        send({ type: "error", message: clientMessage });
       } finally {
-        controller.close();
+        try { controller.close(); } catch { /* already cancelled */ }
       }
+    },
+    cancel() {
+      clientGone = true; // user left the page — do NOT stop the run
     },
   });
 

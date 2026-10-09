@@ -8,7 +8,7 @@
  * existing tool (db-clients, tools-github, the MCP gitlab spawn) keeps reading
  * a single active value and needs no changes.
  */
-import { getDb } from "./db";
+import { getDb, getMeta, setMeta } from "./db";
 
 /** Normalize a pasted secret: trim, strip surrounding quotes and a "Bearer " prefix. */
 export function cleanSecret(raw: string): string {
@@ -178,8 +178,13 @@ export function removeConnection(id: number): void {
 
 export function setActive(kind: ConnKind, id: number): void {
   const d = getDb();
-  d.prepare("UPDATE connections SET is_active=0 WHERE kind=?").run(kind);
-  d.prepare("UPDATE connections SET is_active=1 WHERE id=? AND kind=?").run(id, kind);
+  // 🟠 MAJOR: wrap in a transaction so the exactly-one-active invariant
+  // is never violated even under concurrent requests.
+  const toggle = d.transaction(() => {
+    d.prepare("UPDATE connections SET is_active=0 WHERE kind=?").run(kind);
+    d.prepare("UPDATE connections SET is_active=1 WHERE id=? AND kind=?").run(id, kind);
+  });
+  toggle();
   const c = row(id);
   if (c) applyActiveToLegacy(c);
   configEvents.emit("connection-changed", kind);
@@ -296,25 +301,46 @@ function ensureMigrated(): void {
     );
   }
 
-  // NVIDIA NIM seed from .env: NVIDIA_API_KEY creates a (non-hijacking) AI
-  // connection once, and becomes the default vision model for read_image.
+  // NVIDIA seeds from .env: NVIDIA_API_KEY creates (non-hijacking) AI
+  // connections once, and sets the default vision model for read_image.
+  //
+  // "Once" is tracked in app_meta, NOT by sniffing the config JSON: matching on
+  // `config LIKE '%…%'` re-seeds a duplicate on every start as soon as the user
+  // edits or renames the connection — and deleting a seeded connection should
+  // stay deleted, not come back next launch.
   const nvKey = process.env.NVIDIA_API_KEY?.trim();
   if (nvKey) {
     const NV_MODEL = "mistralai/ministral-14b-instruct-2512";
-    const nvExists = d
-      .prepare("SELECT 1 FROM connections WHERE kind='ai' AND config LIKE '%integrate.api.nvidia.com%' LIMIT 1")
-      .get();
-    if (!nvExists) {
+    const GPT_OSS_MODEL = "openai/gpt-oss-120b";
+
+    /** Insert one seeded AI connection unless it was already seeded before. */
+    const seedNvidia = (metaKey: string, name: string, model: string, legacyMatch: string) => {
+      if (getMeta(metaKey)) return;
+      // Installs seeded before app_meta tracking: adopt the existing row.
+      const existing = d
+        .prepare("SELECT 1 FROM connections WHERE kind='ai' AND config LIKE ? LIMIT 1")
+        .get(legacyMatch);
+      if (existing) {
+        setMeta(metaKey, "adopted");
+        return;
+      }
       const r = d
-        .prepare("INSERT INTO connections(kind,name,config,is_active) VALUES('ai','NVIDIA NIM',?,0)")
-        .run(JSON.stringify({ baseUrl: "https://integrate.api.nvidia.com", model: NV_MODEL, provider: "openai" }));
+        .prepare("INSERT INTO connections(kind,name,config,is_active) VALUES('ai',?,?,0)")
+        .run(name, JSON.stringify({ baseUrl: "https://integrate.api.nvidia.com/v1", model, provider: "openai" }));
       setConnectionSecret(Number(r.lastInsertRowid), nvKey);
+      setMeta(metaKey, String(r.lastInsertRowid));
       // Only becomes active when no other AI connection is active (never hijacks).
       const activeAi = d.prepare("SELECT 1 FROM connections WHERE kind='ai' AND is_active=1 LIMIT 1").get();
       if (!activeAi) setActive("ai", Number(r.lastInsertRowid));
-    }
+    };
+
+    seedNvidia("seed_nvidia_nim", "NVIDIA NIM", NV_MODEL, "%ministral%");
+    // GPT-OSS-120B supports reasoning_content — seeded as its own connection so
+    // the user can switch to it from the model picker.
+    seedNvidia("seed_nvidia_gpt_oss", "NVIDIA GPT-OSS 120B", GPT_OSS_MODEL, "%gpt-oss-120b%");
+
     if (!getConfig().ai.visionModel) {
-      updateConfig({ ai: { ...getConfig().ai, visionModel: NV_MODEL } });
+      updateConfig({ ai: { visionModel: NV_MODEL } });
     }
   }
 

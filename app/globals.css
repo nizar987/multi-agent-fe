@@ -123,6 +123,28 @@ h3 { font-size: 14px; font-weight: 600; margin: 0 0 var(--space-2); }
   flex-direction: column;
   padding: 12px 8px;
   overflow: hidden;
+  /* Frameless window (Electron): the whole sidebar background moves the
+     window; every interactive child opts out below. */
+  -webkit-app-region: drag;
+}
+.sidebar a,
+.sidebar button,
+.sidebar input,
+.sidebar select,
+.sidebar .sidebar-item {
+  -webkit-app-region: no-drag;
+}
+
+/* Slim invisible strip along the very top of the window — grabbing it moves
+   the frameless window (like a titlebar). Inert in a normal browser. */
+.titlebar-drag {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 12px;
+  z-index: 10000;
+  -webkit-app-region: drag;
 }
 
 /* macOS traffic lights (hiddenInset) */
@@ -177,6 +199,37 @@ h3 { font-size: 14px; font-weight: 600; margin: 0 0 var(--space-2); }
 .sidebar-spacer { flex: 1; }
 .sidebar-divider { border-top: 1px solid var(--border); margin: 8px 4px; }
 
+/* nav area scrolls independently when sections outgrow the window */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  min-height: 0;
+}
+.sidebar-section { display: flex; flex-direction: column; }
+.sidebar-section + .sidebar-section { margin-top: 10px; }
+.sidebar-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-tertiary);
+  padding: 2px 12px 4px;
+  user-select: none;
+}
+/* collapsed: section titles become thin dividers */
+.sidebar.collapsed .sidebar-section-title {
+  font-size: 0;
+  height: 0;
+  padding: 0;
+  margin: 4px 6px 8px;
+  border-top: 1px solid var(--border);
+}
+.sidebar.collapsed .sidebar-section:first-child .sidebar-section-title {
+  border-top: none;
+  margin: 0;
+}
+
 .sidebar-item-donate { color: var(--text-tertiary); }
 .sidebar-item-donate:hover { color: var(--accent); text-decoration: none; }
 
@@ -190,6 +243,140 @@ h3 { font-size: 14px; font-weight: 600; margin: 0 0 var(--space-2); }
   border-top: 1px solid var(--border);
   margin-top: 4px;
 }
+
+/* ---- collapsible sidebar ---- */
+.sidebar { transition: width 160ms ease, min-width 160ms ease; }
+
+.sidebar-collapse-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 7px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.sidebar-collapse-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+.sidebar.collapsed {
+  width: 64px;
+  min-width: 64px;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+.sidebar.collapsed .sidebar-label { display: none; }
+.sidebar.collapsed .sidebar-brand {
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0 12px;
+}
+.sidebar.collapsed .sidebar-collapse-btn { margin-left: 0; }
+.sidebar.collapsed .sidebar-item {
+  justify-content: center;
+  padding: 8px 0;
+  font-size: 16px;
+}
+.sidebar.collapsed .sidebar-status {
+  justify-content: center;
+  padding: 8px 0;
+}
+
+/* ============ global approval notifications ============ */
+
+.approval-notifier {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 11000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 380px;
+  width: calc(100vw - 32px);
+}
+.approval-notifier-card {
+  background: var(--bg-muted);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius, 8px);
+  padding: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  animation: approval-pop 180ms ease;
+}
+@keyframes approval-pop {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.approval-notifier-card--offline { border-color: var(--danger, #e5534b); }
+.approval-notifier-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.approval-notifier-head .muted { margin-left: auto; font-variant-numeric: tabular-nums; }
+.approval-notifier-detail {
+  margin: 8px 0;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  max-height: 96px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.approval-notifier-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ============ progress panel (right side) ============ */
+
+.progress-panel {
+  width: 240px;
+  min-width: 240px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-muted);
+  padding: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.progress-panel-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.progress-panel-head .btn-icon { margin-left: auto; }
+.progress-group-name { font-size: 12px; font-weight: 600; margin-bottom: 4px; color: var(--text-secondary); }
+.progress-list { display: flex; flex-direction: column; gap: 4px; }
+.progress-meter {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.progress-meter-fill { height: 100%; background: var(--success, #4caf7d); transition: width 200ms ease; }
+.progress-item {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+.progress-item-icon { width: 14px; flex: none; text-align: center; }
+.progress-item--done { color: var(--text-tertiary); text-decoration: line-through; }
+.progress-item--done .progress-item-icon { color: var(--success, #4caf7d); text-decoration: none; }
+.progress-item--in_progress { color: var(--text-primary); }
+.progress-item--in_progress .progress-item-icon { color: var(--accent); }
 
 /* ============ workspace sessions sidebar ============ */
 
@@ -1340,21 +1527,33 @@ select.chat-conv-select {
   text-transform: uppercase;
 }
 
-/* per-type badge color variants */
+/* per-type badge color variants — use CSS variables for dark mode compatibility (MINOR-6 fix) */
+:root {
+  --color-image: #3b82f6;
+  --color-image-soft: rgba(59, 130, 246, 0.1);
+  --color-image-border: rgba(59, 130, 246, 0.4);
+  --color-document: #f97316;
+  --color-document-soft: rgba(249, 115, 22, 0.1);
+  --color-document-border: rgba(249, 115, 22, 0.4);
+  --color-text-file: #16a34a;
+  --color-text-file-soft: rgba(34, 197, 94, 0.1);
+  --color-text-file-border: rgba(34, 197, 94, 0.4);
+}
+
 .attach-kind-badge--image {
-  background: rgba(59, 130, 246, 0.1);
-  border-color: rgba(59, 130, 246, 0.4);
-  color: #3b82f6;
+  background: var(--color-image-soft);
+  border-color: var(--color-image-border);
+  color: var(--color-image);
 }
 .attach-kind-badge--document {
-  background: rgba(249, 115, 22, 0.1);
-  border-color: rgba(249, 115, 22, 0.4);
-  color: #f97316;
+  background: var(--color-document-soft);
+  border-color: var(--color-document-border);
+  color: var(--color-document);
 }
 .attach-kind-badge--text {
-  background: rgba(34, 197, 94, 0.1);
-  border-color: rgba(34, 197, 94, 0.4);
-  color: #16a34a;
+  background: var(--color-text-file-soft);
+  border-color: var(--color-text-file-border);
+  color: var(--color-text-file);
 }
 
 /* remove (×) button */
@@ -2075,18 +2274,6 @@ select.chat-conv-select {
   color: var(--text-primary);
 }
 
-.tag {
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-
 /* ============ preview panel ============ */
 
 .preview-panel {
@@ -2666,4 +2853,295 @@ select.chat-conv-select {
   color: var(--text-tertiary);
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+/* ============ tag / badge ============ */
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 999px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.tag-optional {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ============ workdir widget (chat input bar) ============ */
+
+.workdir-widget {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  max-width: 240px;
+  overflow: hidden;
+}
+
+.workdir-icon { flex-shrink: 0; font-size: 13px; }
+
+.workdir-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.workdir-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.workdir-btn-set,
+.workdir-btn-change {
+  color: var(--accent);
+}
+.workdir-btn-set:hover:not(:disabled),
+.workdir-btn-change:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+.workdir-btn-set:disabled,
+.workdir-btn-change:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.workdir-btn-clear {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.workdir-btn-clear:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.workdir-btn-clear:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ============ FolderPicker component ============ */
+
+.folder-picker {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.folder-picker-trigger-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.folder-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  overflow: hidden;
+}
+
+.folder-picker-btn--set {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.folder-picker-icon { flex-shrink: 0; }
+
+.folder-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.folder-picker-chevron {
+  flex-shrink: 0;
+  font-size: 9px;
+  color: var(--text-tertiary);
+}
+
+.folder-picker-clear {
+  flex-shrink: 0;
+}
+
+.folder-picker-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 200;
+  min-width: 280px;
+  max-width: 420px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  padding: 4px 0;
+  overflow: hidden;
+}
+
+.folder-picker-menu-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 12px 4px;
+}
+
+.folder-picker-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.folder-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  text-align: left;
+  transition: background 100ms ease;
+}
+
+.folder-picker-item:hover {
+  background: var(--bg-hover);
+}
+
+.folder-picker-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.folder-picker-item-icon { flex-shrink: 0; font-size: 14px; }
+
+.folder-picker-item-path {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.folder-picker-item-name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-picker-item-full {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-picker-item-check {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.folder-picker-browse {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.folder-picker-browse:hover {
+  background: var(--accent-soft);
+}
+
+/* ============ folder-picker-dropdown (AgentForm inline variant) ============ */
+
+.folder-picker-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 200;
+  min-width: 280px;
+  max-width: 420px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  padding: 4px 0;
+  overflow: hidden;
+}
+
+.folder-picker-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 12px 4px;
+}
+
+.folder-picker-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.folder-picker-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.folder-picker-check {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* ============ keyboard shortcut hint ============ */
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  user-select: none;
 }

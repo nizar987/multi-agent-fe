@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 /**
  * 4-step onboarding wizard (DESIGN §3):
@@ -9,6 +10,7 @@ import { useState } from "react";
  * 4. Done — 3 example agents as cards, click → straight into chat.
  */
 export default function Wizard({ onDone }: { onDone: () => void }) {
+  const router = useRouter();
   const [step, setStep] = useState(1);
 
   // step 1
@@ -85,6 +87,14 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
   };
 
   const finishStep3 = async () => {
+    // Save selected folders to settings before proceeding (MAJOR-6 fix)
+    if (folders.length > 0) {
+      await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filesystem: { allowedDirs: folders } }),
+      });
+    }
     const r = await fetch("/api/onboarding", { method: "POST" }).then((r) => r.json());
     setSeedAgents(r.agents ?? []);
     setStep(4);
@@ -136,7 +146,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
 
         {step === 2 && (
           <div className="wizard-step" key={2}>
-            <h2>GitHub & GitLab <span className="tag">optional</span></h2>
+            <h2>GitHub & GitLab <span className="tag tag-optional">optional</span></h2>
             <p className="muted small">So agents can read repos, issues, and MRs. You can fill this in later in Settings.</p>
             <div className="field">
               <label>GitHub Personal Access Token</label>
@@ -159,7 +169,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
 
         {step === 3 && (
           <div className="wizard-step" key={3}>
-            <h2>Local folders <span className="tag">optional</span></h2>
+            <h2>Local folders <span className="tag tag-optional">optional</span></h2>
             <p className="muted small">Pick the folders agents may access with the Filesystem tool.</p>
             {folders.map((f) => (
               <div key={f} className="list-row"><span>📁</span><div className="grow path-truncate">{f}</div></div>
@@ -178,7 +188,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
             <p className="muted small">3 example agents were created for you — click one to start chatting right away.</p>
             <div className="card-grid mb-4">
               {seedAgents.map((a) => (
-                <div key={a.id} className="card clickable" onClick={() => { window.location.href = `/chat/${a.id}`; }}>
+                <div key={a.id} className="card clickable" onClick={() => router.push(`/chat/${a.id}`)}>  
                   <strong>{a.name}</strong>
                   <div className="muted small">Start chatting →</div>
                 </div>
