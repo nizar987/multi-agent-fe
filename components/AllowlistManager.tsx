@@ -15,7 +15,7 @@ const KIND_LABELS: Record<Kind, string> = {
   database: "🗄 SQL",
   redis: "⚡ Redis",
   env: "🔑 .env",
-  learning: "🧠 Knowledge/skill",
+  learning: "🧠 Catalog changes",
 };
 
 /** Manage "Always allow" approval entries — actions here run without asking. */
@@ -74,7 +74,7 @@ export default function AllowlistManager() {
           <option value="database">SQL</option>
           <option value="redis">Redis</option>
           <option value="env">.env read</option>
-          <option value="learning">Knowledge/skill edit</option>
+          <option value="learning">Agent/skill/knowledge change</option>
         </select>
         <input
           className="input mono"

@@ -20,7 +20,7 @@ const TITLES: Record<ApprovalKind, string> = {
   database: "🗄 Wants to run SQL (modifies data)",
   redis: "⚡ Wants to write to Redis",
   env: "🔑 Wants to read a .env file",
-  learning: "🧠 Wants to change your knowledge / skills / shared memory",
+  learning: "🧠 Wants to create or change agents / skills / knowledge / shared memory",
 };
 
 /** Approval card for risky actions — one mechanism for shell, SQL, Redis, and .env reads. */

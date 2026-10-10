@@ -3,37 +3,11 @@ import { getDb } from "@/lib/db";
 import { getAgentRow, updateAgent, deleteAgent } from "@/lib/catalog";
 import { catalogErrorResponse } from "@/lib/catalog-http";
 import { logger } from "@/lib/logger";
+import {
+  clampStr, sanitizeTools, sanitizeSkillIds, sanitizeColor, MAX_AGENT_TEXT as MAX_TEXT,
+} from "@/lib/agent-fields";
 
 export const dynamic = "force-dynamic";
-
-const MAX_TEXT = 100_000;
-const MAX_SHORT = 500;
-
-function clampStr(v: unknown, max = MAX_SHORT): string {
-  if (typeof v !== "string") return "";
-  return v.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").slice(0, max);
-}
-
-const KNOWN_TOOLS = new Set([
-  "github", "gitlab", "filesystem", "memory", "delegate", "shell",
-  "database", "redis", "env", "monitoring", "tavily", "tavily_mcp",
-  "vision", "video",
-]);
-
-function sanitizeTools(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  return (raw as unknown[])
-    .filter((t): t is string => typeof t === "string" && KNOWN_TOOLS.has(t))
-    .slice(0, 20);
-}
-
-function sanitizeSkillIds(raw: unknown): number[] {
-  if (!Array.isArray(raw)) return [];
-  return (raw as unknown[])
-    .map(Number)
-    .filter((n) => Number.isInteger(n) && n > 0)
-    .slice(0, 50);
-}
 
 export async function GET(_: NextRequest, { params }: { params: { id: string } }) {
   const id = Number(params.id);
@@ -74,7 +48,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   const tools = sanitizeTools(b.tools);
   const skill_ids = sanitizeSkillIds(b.skill_ids);
   const avatar = clampStr(b.avatar ?? "🤖", 16);
-  const color = /^#[0-9a-fA-F]{6}$/.test(String(b.color ?? "")) ? String(b.color) : "#c15f3c";
+  const color = sanitizeColor(b.color);
   const shell_auto = b.shell_auto ? 1 : 0;
   const category = clampStr(b.category ?? "");
 

@@ -6,6 +6,7 @@ type Counts = { agents: number; skills: number; knowledge: number };
 
 interface SharedDbInfo {
   mode: "local" | "shared";
+  source: "settings" | "env" | null;
   online: boolean | null;
   lastSyncAt: number | null;
   lastError: string | null;
@@ -79,11 +80,17 @@ export default function SharedDbSettings({ secret, backend, onSecretChanged }: P
         tail={secret.tail}
         backend={backend}
         onChanged={onChanged}
-        placeholder="postgresql://user:password@host:port/railway"
+        placeholder="postgresql://postgres:PASSWORD@reseau.proxy.rlwy.net:53957/railway"
       />
       {error && <div className="banner-danger mb-2">{error}</div>}
       {info && (
         <>
+          {info.source === "env" && (
+            <div className="hint mb-2">
+              Using <code>SHARED_DATABASE_URL</code> from <code>.env</code>. Note: .env is bundled into the app build —
+              avoid it for builds you share. A URL saved above (keychain) takes precedence.
+            </div>
+          )}
           <div className="hint mb-2">
             {info.mode === "local"
               ? "Not connected — using the local SQLite catalog only."
