@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package agentplatform.v1;
+
+option py_generic_services = false;
+
+service HealthService {
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message PingRequest {}
+
+message PingResponse {
+  bool   ok      = 1;
+  string version = 2;
+}

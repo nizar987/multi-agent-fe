@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package agentplatform.v1;
+
+import "agentplatform/v1/common.proto";
+
+option py_generic_services = false;
+
+service KnowledgeService {
+  rpc ListKnowledge   (ListKnowledgeRequest)   returns (ListKnowledgeResponse);
+  rpc GetKnowledge    (GetKnowledgeRequest)     returns (KnowledgeItem);
+  rpc CreateKnowledge (CreateKnowledgeRequest)  returns (KnowledgeItem);
+  rpc DeleteKnowledge (DeleteKnowledgeRequest)  returns (Empty);
+}
+
+message KnowledgeItem {
+  int64  id         = 1;
+  string title      = 2;
+  string content    = 3;
+  int64  agent_id   = 4;   // 0 = global
+  string agent_name = 5;   // denormalized for display
+  string created_at = 6;
+}
+
+message ListKnowledgeRequest  {
+  int64       agent_id = 1;  // 0 = all
+  PageRequest page     = 2;
+}
+message ListKnowledgeResponse {
+  repeated KnowledgeItem items = 1;
+  PageMeta meta                = 2;
+}
+
+message GetKnowledgeRequest    { int64 id = 1; }
+
+message CreateKnowledgeRequest {
+  string title    = 1;
+  string content  = 2;
+  int64  agent_id = 3;
+}
+
+message DeleteKnowledgeRequest { int64 id = 1; }

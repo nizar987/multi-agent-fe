@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package agentplatform.v1;
+
+import "agentplatform/v1/common.proto";
+
+option py_generic_services = false;
+
+service AgentService {
+  rpc ListAgents   (ListAgentsRequest)    returns (ListAgentsResponse);
+  rpc GetAgent     (GetAgentRequest)      returns (Agent);
+  rpc CreateAgent  (CreateAgentRequest)   returns (Agent);
+  rpc UpdateAgent  (UpdateAgentRequest)   returns (Agent);
+  rpc DeleteAgent  (DeleteAgentRequest)   returns (Empty);
+}
+
+message Agent {
+  int64  id             = 1;
+  string name           = 2;
+  string description    = 3;
+  string system_prompt  = 4;
+  string model_override = 5;
+  repeated string tools = 6;
+  repeated int64 skill_ids = 7;
+  string avatar         = 8;
+  string color          = 9;
+  bool   shell_auto     = 10;
+  string category       = 11;
+  string created_at     = 12;
+  string updated_at     = 13;
+}
+
+message ListAgentsRequest  { PageRequest page = 1; }
+message ListAgentsResponse {
+  repeated Agent agents = 1;
+  PageMeta meta         = 2;
+}
+
+message GetAgentRequest    { int64 id = 1; }
+
+message CreateAgentRequest {
+  string name           = 1;
+  string description    = 2;
+  string system_prompt  = 3;
+  string model_override = 4;
+  repeated string tools = 5;
+  repeated int64 skill_ids = 6;
+  string avatar         = 7;
+  string color          = 8;
+  bool   shell_auto     = 9;
+  string category       = 10;
+}
+
+message UpdateAgentRequest {
+  int64  id             = 1;
+  string name           = 2;
+  string description    = 3;
+  string system_prompt  = 4;
+  string model_override = 5;
+  repeated string tools = 6;
+  repeated int64 skill_ids = 7;
+  string avatar         = 8;
+  string color          = 9;
+  bool   shell_auto     = 10;
+  string category       = 11;
+}
+
+message DeleteAgentRequest { int64 id = 1; }
