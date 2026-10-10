@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { getAgentRow, updateAgent, deleteAgent } from "@/lib/catalog";
+import { catalogErrorResponse } from "@/lib/catalog-http";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -37,7 +39,7 @@ export async function GET(_: NextRequest, { params }: { params: { id: string } }
   const id = Number(params.id);
   if (!Number.isInteger(id) || id <= 0)
     return NextResponse.json({ error: "invalid id" }, { status: 400 });
-  const a = getDb().prepare("SELECT * FROM agents WHERE id=?").get(id);
+  const a = await getAgentRow(id);
   if (!a) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json(a);
 }
@@ -76,15 +78,19 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   const shell_auto = b.shell_auto ? 1 : 0;
   const category = clampStr(b.category ?? "");
 
-  const result = getDb()
-    .prepare(`UPDATE agents SET name=?, description=?, system_prompt=?, model_override=?,
-      tools=?, skill_ids=?, avatar=?, color=?, shell_auto=?, working_dir=?, category=?,
-      updated_at=datetime('now') WHERE id=?`)
-    .run(name, description, system_prompt, model_override,
-      JSON.stringify(tools), JSON.stringify(skill_ids),
-      avatar, color, shell_auto, workingDir, category, id);
-
-  if (result.changes === 0)
+  let found: boolean;
+  try {
+    found = await updateAgent(
+      id,
+      { name, description, system_prompt, model_override, tools: JSON.stringify(tools),
+        skill_ids: JSON.stringify(skill_ids), avatar, color, category },
+      // per-machine settings — never sent to the shared database
+      { shell_auto, working_dir: workingDir }
+    );
+  } catch (e) {
+    return catalogErrorResponse(e, `Agent update failed (id=${id})`);
+  }
+  if (!found)
     return NextResponse.json({ error: "not found" }, { status: 404 });
 
   logger.info(`Agent updated: id=${id}, name=${name}`);
@@ -139,20 +145,18 @@ export async function DELETE(_: NextRequest, { params }: { params: { id: string 
   // Foreign keys are enforced (lib/db.ts), so a row still referencing this
   // agent aborts the delete. Every reference cascades, but surface a readable
   // 409 instead of an unhandled 500 if a future table forgets its ON DELETE.
-  let result;
+  let deleted: boolean;
   try {
-    result = getDb().prepare("DELETE FROM agents WHERE id=?").run(id);
+    deleted = await deleteAgent(id);
   } catch (e: any) {
+    if (!String(e?.code ?? "").includes("SQLITE_CONSTRAINT")) return catalogErrorResponse(e, `Agent delete failed (id=${id})`);
     logger.error(`Agent delete failed: id=${id}`, e);
-    if (String(e?.code ?? "").includes("SQLITE_CONSTRAINT")) {
-      return NextResponse.json(
-        { error: "This agent is still referenced by other records and could not be deleted." },
-        { status: 409 }
-      );
-    }
-    throw e;
+    return NextResponse.json(
+      { error: "This agent is still referenced by other records and could not be deleted." },
+      { status: 409 }
+    );
   }
-  if (result.changes === 0)
+  if (!deleted)
     return NextResponse.json({ error: "not found" }, { status: 404 });
 
   logger.info(`Agent deleted: id=${id}`);

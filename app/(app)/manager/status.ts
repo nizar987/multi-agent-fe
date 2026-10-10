@@ -13,6 +13,7 @@ export function eventLabel(type: string): string {
     case "assignment_approved":     return "🎉 Approved";
     case "task_completed":          return "✅ Task completed";
     case "task_failed":             return "💥 Task failed";
+    case "auto_resumed":            return "↻ Resumed automatically";
     default:                        return type;
   }
 }

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { listKnowledge, createKnowledge } from "@/lib/catalog";
+import { catalogErrorResponse } from "@/lib/catalog-http";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -16,10 +18,7 @@ function asText(v: unknown): string {
 }
 
 export async function GET() {
-  const rows = getDb()
-    .prepare(`SELECT k.*, a.name AS agent_name FROM knowledge k
-      LEFT JOIN agents a ON a.id = k.agent_id ORDER BY k.id DESC`)
-    .all() as Record<string, unknown>[];
+  const rows = (await listKnowledge()) as Record<string, unknown>[];
   // Defensive: a BLOB-typed cell would otherwise serialize as {type:"Buffer",…}
   // and crash the page that renders it.
   const safe = rows.map((r) => ({
@@ -56,10 +55,11 @@ export async function POST(req: NextRequest) {
     agent_id = parsed;
   }
 
-  const r = getDb()
-    .prepare("INSERT INTO knowledge(title,content,agent_id) VALUES(?,?,?)")
-    .run(title, content, agent_id);
-
-  logger.info(`Knowledge created: id=${r.lastInsertRowid}, title=${title}, agent_id=${agent_id}`);
-  return NextResponse.json({ id: Number(r.lastInsertRowid) });
+  try {
+    const id = await createKnowledge({ title, content, agent_id });
+    logger.info(`Knowledge created: id=${id}, title=${title}, agent_id=${agent_id}`);
+    return NextResponse.json({ id });
+  } catch (e) {
+    return catalogErrorResponse(e, "Knowledge create failed");
+  }
 }

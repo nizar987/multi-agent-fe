@@ -567,7 +567,26 @@ function buildReport(task: ManagerTask, assignments: TaskAssignment[]): string {
  * terminal state. Safe to call fresh (after create) or to resume (after the
  * user answers a clarification). Runs to completion in the background.
  */
+/** Tasks being driven by runManager in THIS process (the watchdog resumes the rest). */
+const runningTasks = new Set<number>();
+
+export function isManagerTaskRunning(taskId: number): boolean {
+  return runningTasks.has(taskId);
+}
+
 export async function runManager(taskId: number): Promise<void> {
+  if (runningTasks.has(taskId)) return; // already being driven
+  runningTasks.add(taskId);
+  try {
+    const { syncShared } = await import("./catalog");
+    await syncShared(); // latest agents/skills from the shared DB, if configured
+    await driveTask(taskId);
+  } finally {
+    runningTasks.delete(taskId);
+  }
+}
+
+async function driveTask(taskId: number): Promise<void> {
   try {
     let task = tasksRepo.get(taskId);
     if (!task) return;

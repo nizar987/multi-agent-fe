@@ -4,6 +4,7 @@
  */
 import { NextRequest } from "next/server";
 import { getDb } from "@/lib/db";
+import { startRun } from "@/lib/run-registry";
 import { runAgent, RunEvent, RunMode } from "@/lib/agent-runtime";
 import { hasSecret } from "@/lib/config";
 import type { AiMessage } from "@/lib/ai";
@@ -76,13 +77,22 @@ export async function POST(req: NextRequest) {
           clientGone = true; // stream cancelled — keep running, drop events
         }
       };
+      // Registered so the watchdog can resume it if it dies before finishing.
+      const run = startRun({ agentId: conv.agent_id, conversationId, surface: "chat", mode, modelOverride });
       try {
         logger.info(`Chat started: conv=${conversationId}, agent=${conv.agent_id}, mode=${mode}`);
-        const finalText = await runAgent(conv.agent_id, history, send, 0, mode, { interactive: true, conversationId, ...(modelOverride ? { modelOverride } : {}) });
+        const finalText = await runAgent(conv.agent_id, history, send, 0, mode, {
+          interactive: true,
+          conversationId,
+          heartbeat: run.beat,
+          ...(modelOverride ? { modelOverride } : {}),
+        });
         db.prepare("INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)")
           .run(conversationId, "assistant", finalText || "(no answer)");
+        run.complete();
         send({ type: "done", finalText });
       } catch (e: any) {
+        run.fail(e);
         logger.error(`Chat error: conv=${conversationId}`, e);
         // 🟠 MAJOR: Do NOT send raw stack trace / internal error message to client.
         // The full error is persisted to the log file via logger.error above.

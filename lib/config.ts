@@ -42,7 +42,10 @@ export type AppConfig = {
   onboardingDone: boolean;
 };
 
-export type SecretName = "aiApiKey" | "githubToken" | "gitlabToken" | "dbPassword" | "redisPassword" | "tavilyApiKey";
+export type SecretName =
+  | "aiApiKey" | "githubToken" | "gitlabToken" | "dbPassword" | "redisPassword" | "tavilyApiKey"
+  /** postgres:// URL of the shared catalog database (agents, skills, knowledge). */
+  | "sharedDbUrl";
 
 const DEFAULTS: AppConfig = {
   ai: { baseUrl: "https://api.anthropic.com", model: "claude-sonnet-5", provider: "auto", visionModel: "" },

@@ -40,7 +40,8 @@ export type TaskEventType =
   | "revision_requested"
   | "assignment_approved"
   | "task_completed"
-  | "task_failed";
+  | "task_failed"
+  | "auto_resumed";
 
 export interface ManagerTask {
   id: number;

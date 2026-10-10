@@ -17,6 +17,7 @@
  * instructions smuggled in via web pages or files cannot do it silently.
  */
 import { getDb } from "./db";
+import * as catalog from "./catalog";
 import { AiTool } from "./ai";
 import { memoryWrite, memoryDelete } from "./memory";
 import { logger } from "./logger";
@@ -302,7 +303,7 @@ async function saveKnowledge(owner: Owner, input: Input, confirm: ConfirmFn): Pr
     if (target.created_by_agent !== owner.id) {
       await approveForeign(confirm, `Update knowledge #${target.id} "${asText(target.title)}" (created by ${ownerLabel(target.created_by_agent, owner)})\nNew title: ${title}\n\n${content.slice(0, 500)}`);
     }
-    d.prepare("UPDATE knowledge SET title=?, content=? WHERE id=?").run(title, content, target.id);
+    await catalog.updateKnowledge(target.id, { title, content });
     logger.info(`Agent "${owner.name}" updated knowledge id=${target.id} "${title}"`);
     return `Knowledge updated: ${title}`;
   }
@@ -312,10 +313,8 @@ async function saveKnowledge(owner: Owner, input: Input, confirm: ConfirmFn): Pr
   if (count >= MAX_KNOWLEDGE) {
     throw new Error(`Knowledge limit reached (${MAX_KNOWLEDGE} documents). Delete or merge old ones first.`);
   }
-  const r = d
-    .prepare("INSERT INTO knowledge(title,content,agent_id,created_by_agent) VALUES(?,?,?,?)")
-    .run(title, content, owner.id, owner.id);
-  logger.info(`Agent "${owner.name}" created knowledge id=${r.lastInsertRowid} "${title}"`);
+  const newId = await catalog.createKnowledge({ title, content, agent_id: owner.id, created_by_agent: owner.id });
+  logger.info(`Agent "${owner.name}" created knowledge id=${newId} "${title}"`);
   return `Knowledge saved: ${title} (available as context from your next run)`;
 }
 
@@ -326,7 +325,7 @@ async function deleteKnowledge(owner: Owner, input: Input, confirm: ConfirmFn): 
   if (target.created_by_agent !== owner.id) {
     await approveForeign(confirm, `Delete knowledge #${target.id} "${title}" (created by ${ownerLabel(target.created_by_agent, owner)})`);
   }
-  getDb().prepare("DELETE FROM knowledge WHERE id=?").run(target.id);
+  await catalog.deleteKnowledge(target.id);
   logger.info(`Agent "${owner.name}" deleted knowledge id=${target.id} "${title}"`);
   return `Knowledge deleted: ${title}`;
 }
@@ -344,22 +343,18 @@ function parseSkillIds(raw: string | null | undefined): number[] {
   }
 }
 
-function attachSkill(agentId: number, skillId: number): void {
+async function attachSkill(agentId: number, skillId: number): Promise<void> {
   const row = getDb().prepare("SELECT skill_ids FROM agents WHERE id=?").get(agentId) as { skill_ids: string | null } | undefined;
   const ids = parseSkillIds(row?.skill_ids);
   if (ids.includes(skillId)) return;
-  getDb()
-    .prepare("UPDATE agents SET skill_ids=?, updated_at=datetime('now') WHERE id=?")
-    .run(JSON.stringify([...ids, skillId]), agentId);
+  await catalog.setAgentSkillIds(agentId, [...ids, skillId]);
 }
 
-function detachSkillEverywhere(skillId: number): void {
-  const d = getDb();
-  const agents = d.prepare("SELECT id, skill_ids FROM agents").all() as { id: number; skill_ids: string | null }[];
-  const upd = d.prepare("UPDATE agents SET skill_ids=?, updated_at=datetime('now') WHERE id=?");
+async function detachSkillEverywhere(skillId: number): Promise<void> {
+  const agents = getDb().prepare("SELECT id, skill_ids FROM agents").all() as { id: number; skill_ids: string | null }[];
   for (const a of agents) {
     const ids = parseSkillIds(a.skill_ids);
-    if (ids.includes(skillId)) upd.run(JSON.stringify(ids.filter((id) => id !== skillId)), a.id);
+    if (ids.includes(skillId)) await catalog.setAgentSkillIds(a.id, ids.filter((id) => id !== skillId));
   }
 }
 
@@ -389,8 +384,8 @@ async function saveSkill(owner: Owner, input: Input, confirm: ConfirmFn): Promis
     if (target.created_by_agent !== owner.id) {
       await approveForeign(confirm, `Update skill #${target.id} "${asText(target.name)}" (created by ${ownerLabel(target.created_by_agent, owner)})\nNew name: ${name}\n\n${content.slice(0, 500)}`);
     }
-    d.prepare("UPDATE skills SET name=?, description=?, content=? WHERE id=?").run(name, description, content, target.id);
-    attachSkill(owner.id, target.id);
+    await catalog.updateSkill(target.id, { name, description, content });
+    await attachSkill(owner.id, target.id);
     logger.info(`Agent "${owner.name}" updated skill id=${target.id} "${name}"`);
     return `Skill updated: ${name}`;
   }
@@ -400,11 +395,8 @@ async function saveSkill(owner: Owner, input: Input, confirm: ConfirmFn): Promis
   if (count >= MAX_SKILLS) {
     throw new Error(`Skill limit reached (${MAX_SKILLS} skills). Delete or merge old ones first.`);
   }
-  const r = d
-    .prepare("INSERT INTO skills(name,description,content,created_by_agent) VALUES(?,?,?,?)")
-    .run(name, description, content, owner.id);
-  const skillId = Number(r.lastInsertRowid);
-  attachSkill(owner.id, skillId);
+  const skillId = await catalog.createSkill({ name, description, content, created_by_agent: owner.id });
+  await attachSkill(owner.id, skillId);
   logger.info(`Agent "${owner.name}" created skill id=${skillId} "${name}"`);
   return `Skill saved: ${name} (loaded into your instructions from your next run)`;
 }
@@ -416,8 +408,8 @@ async function deleteSkill(owner: Owner, input: Input, confirm: ConfirmFn): Prom
   if (target.created_by_agent !== owner.id) {
     await approveForeign(confirm, `Delete skill #${target.id} "${name}" (created by ${ownerLabel(target.created_by_agent, owner)}) — detaches it from every agent`);
   }
-  getDb().prepare("DELETE FROM skills WHERE id=?").run(target.id);
-  detachSkillEverywhere(target.id);
+  await catalog.deleteSkill(target.id);
+  await detachSkillEverywhere(target.id);
   logger.info(`Agent "${owner.name}" deleted skill id=${target.id} "${name}"`);
   return `Skill deleted: ${name}`;
 }
