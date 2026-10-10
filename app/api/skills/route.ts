@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { listSkills, createSkill } from "@/lib/catalog";
+import { catalogErrorResponse } from "@/lib/catalog-http";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +11,7 @@ function clampStr(v: unknown, max: number): string {
 }
 
 export async function GET() {
-  return NextResponse.json(getDb().prepare("SELECT * FROM skills ORDER BY id").all());
+  return NextResponse.json(await listSkills());
 }
 
 export async function POST(req: NextRequest) {
@@ -25,10 +26,11 @@ export async function POST(req: NextRequest) {
   const description = clampStr(b.description ?? "", 1000);
   const content = clampStr(b.content ?? "", 100_000);
 
-  const r = getDb()
-    .prepare("INSERT INTO skills(name,description,content) VALUES(?,?,?)")
-    .run(name, description, content);
-
-  logger.info(`Skill created: id=${r.lastInsertRowid}, name=${name}`);
-  return NextResponse.json({ id: Number(r.lastInsertRowid) });
+  try {
+    const id = await createSkill({ name, description, content });
+    logger.info(`Skill created: id=${id}, name=${name}`);
+    return NextResponse.json({ id });
+  } catch (e) {
+    return catalogErrorResponse(e, "Skill create failed");
+  }
 }

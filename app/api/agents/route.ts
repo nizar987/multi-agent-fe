@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { listAgents, createAgent } from "@/lib/catalog";
+import { catalogErrorResponse } from "@/lib/catalog-http";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -35,8 +36,8 @@ function sanitizeSkillIds(raw: unknown): number[] {
 }
 
 export async function GET() {
-  const agents = getDb().prepare("SELECT * FROM agents ORDER BY id").all();
-  return NextResponse.json(agents);
+  // Fetched from the shared database when configured (falls back to the local copy).
+  return NextResponse.json(await listAgents());
 }
 
 export async function POST(req: NextRequest) {
@@ -58,14 +59,15 @@ export async function POST(req: NextRequest) {
   const shell_auto = b.shell_auto ? 1 : 0;
   const category = clampStr(b.category ?? "");
 
-  const r = getDb()
-    .prepare(
-      "INSERT INTO agents(name,description,system_prompt,model_override,tools,skill_ids,avatar,color,shell_auto,category) VALUES(?,?,?,?,?,?,?,?,?,?)"
-    )
-    .run(name, description, system_prompt, model_override,
-      JSON.stringify(tools), JSON.stringify(skill_ids),
-      avatar, color, shell_auto, category);
-
-  logger.info(`Agent created: id=${r.lastInsertRowid}, name=${name}`);
-  return NextResponse.json({ id: Number(r.lastInsertRowid) });
+  try {
+    const id = await createAgent(
+      { name, description, system_prompt, model_override, tools: JSON.stringify(tools),
+        skill_ids: JSON.stringify(skill_ids), avatar, color, category },
+      { shell_auto }
+    );
+    logger.info(`Agent created: id=${id}, name=${name}`);
+    return NextResponse.json({ id });
+  } catch (e) {
+    return catalogErrorResponse(e, "Agent create failed");
+  }
 }

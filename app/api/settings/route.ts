@@ -25,6 +25,7 @@ export async function GET() {
       dbPassword: { set: hasSecret("dbPassword"), tail: secretTail("dbPassword") },
       redisPassword: { set: hasSecret("redisPassword"), tail: secretTail("redisPassword") },
       tavilyApiKey: { set: hasSecret("tavilyApiKey"), tail: secretTail("tavilyApiKey") },
+      sharedDbUrl: { set: hasSecret("sharedDbUrl"), tail: secretTail("sharedDbUrl") },
     },
     secretBackend: secretBackendLabel(),
     backup: backupStatus(),

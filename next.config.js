@@ -4,6 +4,8 @@ const nextConfig = {
   experimental: {
     serverComponentsExternalPackages: ["better-sqlite3", "@modelcontextprotocol/sdk"],
     workerThreads: false,
+    // instrumentation.ts starts the run watchdog (auto-resume) at server start.
+    instrumentationHook: true,
     cpus: 1,
     // MCP server di-spawn dinamis — pastikan ikut ke output standalone
     outputFileTracingIncludes: {

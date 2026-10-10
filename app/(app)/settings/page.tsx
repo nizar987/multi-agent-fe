@@ -2,6 +2,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import ToolCacheSettings from "@/components/ToolCacheSettings";
+import RunWatchdogSettings from "@/components/RunWatchdogSettings";
+import SharedDbSettings from "@/components/SharedDbSettings";
 
 export default function SettingsPage() {
   const [data, setData] = useState<any>(null);
@@ -166,8 +168,18 @@ export default function SettingsPage() {
         </div>
       </section>
 
+      {/* ============ Shared database (agents / skills / knowledge) ============ */}
+      <SharedDbSettings
+        secret={data.secrets?.sharedDbUrl ?? { set: false, tail: null }}
+        backend={data.secretBackend}
+        onSecretChanged={load}
+      />
+
       {/* ============ Tool cache ============ */}
       <ToolCacheSettings />
+
+      {/* ============ Auto-resume ============ */}
+      <RunWatchdogSettings />
 
       {/* ============ Appearance & more ============ */}
       <section className="settings-section" id="misc">

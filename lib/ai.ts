@@ -467,12 +467,39 @@ function buildRequest(opts: CallOpts, stream: boolean) {
   };
 }
 
+/** No response headers within this time → abort (and retry). */
+const RESPONSE_TIMEOUT_MS = 5 * 60_000;
+/** Hard ceiling for one call including a long streamed answer. */
+const TOTAL_TIMEOUT_MS = 20 * 60_000;
+/** A stream that sends no bytes for this long is considered stalled. */
+const STREAM_IDLE_MS = 3 * 60_000;
+
+/**
+ * fetch with a response-headers timeout and a total ceiling. (A single 5-minute
+ * AbortSignal used to cut off long but healthy streamed answers; stalls inside
+ * a stream are caught by the idle timeout in sseEvents instead.)
+ */
+async function timedFetch(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const headersTimer = setTimeout(() => controller.abort(new Error("AI request timed out waiting for a response")), RESPONSE_TIMEOUT_MS);
+  const totalTimer = setTimeout(() => controller.abort(new Error("AI request timed out (exceeded 20 minutes)")), TOTAL_TIMEOUT_MS);
+  (totalTimer as { unref?: () => void }).unref?.();
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (e) {
+    clearTimeout(totalTimer);
+    throw e;
+  } finally {
+    clearTimeout(headersTimer);
+  }
+}
+
 async function fetchWithRetry(url: string, init: RequestInit, baseUrl: string, model: string): Promise<Response> {
   const MAX_RETRIES = 3;
   let lastErr: unknown;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      return await fetch(url, { ...init, signal: AbortSignal.timeout(300_000) }); // 5 minutes
+      return await timedFetch(url, init);
     } catch (e: unknown) {
       lastErr = e;
       if (attempt < MAX_RETRIES - 1) {
@@ -591,12 +618,31 @@ export async function callAiStream(opts: CallOpts & { onText?: (fullText: string
 }
 
 /** Async iterator over `data:` payloads of an SSE byte stream. */
+/** reader.read() that fails when the stream sends nothing for STREAM_IDLE_MS. */
+async function readWithIdleTimeout(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const idle = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`AI stream stalled — no data for ${STREAM_IDLE_MS / 1000}s`)),
+      STREAM_IDLE_MS
+    );
+  });
+  try {
+    return await Promise.race([reader.read(), idle]);
+  } catch (e) {
+    reader.cancel().catch(() => { /* already closed */ });
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function* sseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<any> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readWithIdleTimeout(reader);
     if (done) break;
     buf += decoder.decode(value, { stream: true });
     const chunks = buf.split("\n\n");

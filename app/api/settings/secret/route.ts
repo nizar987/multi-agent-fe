@@ -5,7 +5,7 @@ import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
-const VALID: SecretName[] = ["aiApiKey", "githubToken", "gitlabToken", "dbPassword", "redisPassword", "tavilyApiKey"];
+const VALID: SecretName[] = ["aiApiKey", "githubToken", "gitlabToken", "dbPassword", "redisPassword", "tavilyApiKey", "sharedDbUrl"];
 
 export async function POST(req: NextRequest) {
   // 🔴 CRITICAL: secrets must only be accessible from localhost

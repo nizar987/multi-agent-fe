@@ -20,6 +20,11 @@ import { cronToolDefs, callCronTool } from "./tools-cron";
 import { learningToolDefs, callLearningTool, learningPrompt, learningNotesPrompt } from "./tools-learning";
 import { withToolCache, invalidateAfter, RunToolMemo, CachedResult } from "./tool-cache";
 import { claimForWrite, releaseFileLocks, newLockOwnerId } from "./file-locks";
+import { syncShared } from "./catalog";
+import {
+  MAX_IDLE_NUDGES, MAX_TOTAL_NUDGES, TRANSIENT_RETRY_DELAYS_MS,
+  looksUnfinished, isTransientAiError, nudgeMessage,
+} from "./run-guard";
 import {
   boardToolDefs, BOARD_PROMPT, boardPost, boardReadText, boardPromptNotes,
   boardNotesSince, boardLastId, formatNotes,
@@ -114,6 +119,8 @@ export interface RunOptions {
    * sub-agents, so a parent and its helpers share their file claims.
    */
   lockOwnerId?: string;
+  /** Called on every loop step / tool result — the run registry's heartbeat. */
+  heartbeat?: () => void;
 }
 const PLAN_MSG =
   "Plan mode is active — the action was NOT executed. Explain to the user the plan/actions you intend to take; " +
@@ -428,6 +435,9 @@ export async function runAgent(
 ): Promise<string> {
   // Delegated sub-agents inherit the root run's lock owner (and its claims).
   if (opts.lockOwnerId) return runAgentLoop(agentId, history, onEvent, depth, mode, opts);
+  // Root run: pull the latest agents/skills/knowledge from the shared DB into
+  // the local copy the runtime reads (no-op without a shared DB; never throws).
+  await syncShared();
   const lockOwnerId = newLockOwnerId();
   try {
     return await runAgentLoop(agentId, history, onEvent, depth, mode, { ...opts, lockOwnerId });
@@ -491,9 +501,15 @@ async function runAgentLoop(
   // (in the UI stream and in the saved answer) instead of replacing it.
   let carry = "";
   let autoContinues = 0;
-  let checklistNudges = 0;
+  // Persistence: when the model stops before the work is done it is nudged to
+  // continue. idleNudges resets whenever it actually runs a tool, so a model
+  // that keeps making progress can be nudged again; one that just keeps
+  // stopping gives up after MAX_IDLE_NUDGES.
+  let totalNudges = 0;
+  let idleNudges = 0;
+  let unfinishedNudges = 0;
+  let emptyNudges = 0;
   const MAX_AUTO_CONTINUES = 6;
-  const MAX_CHECKLIST_NUDGES = 2;
 
   // Prompt caching: `system` holds text that stays identical across runs and
   // across the iterations of this run (cached by the provider). Anything that
@@ -595,7 +611,9 @@ async function runAgentLoop(
     // On a NETWORK failure (offline, DNS, refused) the run PAUSES instead of
     // dying — it waits for the user to press Retry on the notification card,
     // then re-issues the same AI call. API errors (bad key, 4xx/5xx) still throw.
+    opts.heartbeat?.();
     let resp!: Awaited<ReturnType<typeof callAiStream>>;
+    let transientRetries = 0;
     for (;;) {
       try {
         resp = await callAiStream({
@@ -611,7 +629,20 @@ async function runAgentLoop(
         });
         break;
       } catch (e: any) {
-        if (!isNetworkError(e)) throw e;
+        if (!isNetworkError(e)) {
+          // Overload / rate limit / 5xx / stalled stream: wait and re-send
+          // instead of ending the run. Config errors still fail fast.
+          if (isTransientAiError(e) && transientRetries < TRANSIENT_RETRY_DELAYS_MS.length) {
+            const wait = TRANSIENT_RETRY_DELAYS_MS[transientRetries++];
+            const reason = String(e?.message ?? e);
+            logger.warn(`Agent "${agent.name}": transient AI error — retry ${transientRetries}/${TRANSIENT_RETRY_DELAYS_MS.length} in ${wait / 1000}s (${reason})`);
+            onEvent({ type: "system_notice", text: `AI error (${reason.slice(0, 120)}) — retrying in ${wait / 1000}s…` });
+            await new Promise((r) => setTimeout(r, wait));
+            opts.heartbeat?.();
+            continue;
+          }
+          throw e;
+        }
         const reason = String(e?.message ?? e);
         logger.error(`Agent "${agent.name}": network error — run paused, waiting for the user to retry. (${reason})`);
         onEvent({
@@ -675,28 +706,35 @@ async function runAgentLoop(
         onEvent({ type: "system_notice", text: "Output hit the token limit repeatedly — stopped. Say 'continue' to resume." });
       }
 
-      // (b) The model ended its turn while the progress checklist still has
-      // unfinished items — nudge it to keep working instead of completing.
-      if (depth === 0 && opts.conversationId && mode !== "plan" && checklistNudges < MAX_CHECKLIST_NUDGES) {
-        const open = getTodos(opts.conversationId).filter((t) => t.status !== "done");
+      // (b) The model ended its turn but the work is not done — nudge it to
+      // keep going: open checklist items, a reply that announces work it did
+      // not do, or an empty reply.
+      if (depth === 0 && mode !== "plan" && totalNudges < MAX_TOTAL_NUDGES && idleNudges < MAX_IDLE_NUDGES) {
+        const open = opts.conversationId ? getTodos(opts.conversationId).filter((t) => t.status !== "done") : [];
+        let nudge: { content: string; notice: string } | null = null;
         if (open.length > 0) {
-          checklistNudges++;
+          nudge = {
+            content: nudgeMessage("checklist", open.map((t) => `- [${t.status}] ${t.content}`).join("\n")),
+            notice: `Checklist has ${open.length} unfinished item(s) — telling the agent to continue…`,
+          };
+        } else if (route.size > 0 && unfinishedNudges < 2 && resp.stop_reason !== "max_tokens" && looksUnfinished(finalText)) {
+          unfinishedNudges++;
+          nudge = { content: nudgeMessage("unfinished"), notice: "The agent stopped mid-task — telling it to continue…" };
+        } else if (!finalText.trim() && emptyNudges < 1) {
+          emptyNudges++;
+          nudge = { content: nudgeMessage("empty"), notice: "Empty reply — asking the agent to continue…" };
+        }
+        if (nudge) {
+          totalNudges++;
+          idleNudges++;
           carry = ""; // the nudged reply is a fresh answer, not a continuation
           messages.push({
             role: "assistant",
             content: (resp.content?.length ? resp.content : [{ type: "text", text: finalText || "…" }]) as any,
           });
-          messages.push({
-            role: "user",
-            content:
-              `[system] Your progress checklist still has ${open.length} unfinished item(s):\n` +
-              open.map((t) => `- [${t.status}] ${t.content}`).join("\n") +
-              "\nThe task is NOT complete. Continue working on these items NOW using your tools. " +
-              "If an item is actually finished or no longer applies, update it via progress_update. " +
-              "Only give your final answer when every item is done, or after asking the user via ask_user when you are truly blocked.",
-          });
-          logger.warn(`Agent "${agent.name}": ended turn with ${open.length} open checklist item(s) — nudging to continue (${checklistNudges}/${MAX_CHECKLIST_NUDGES}).`);
-          onEvent({ type: "system_notice", text: `Checklist has ${open.length} unfinished item(s) — telling the agent to continue…` });
+          messages.push({ role: "user", content: nudge.content });
+          logger.warn(`Agent "${agent.name}": ${nudge.notice} (nudge ${totalNudges}/${MAX_TOTAL_NUDGES}, idle ${idleNudges}/${MAX_IDLE_NUDGES})`);
+          onEvent({ type: "system_notice", text: nudge.notice });
           continue;
         }
       }
@@ -705,6 +743,7 @@ async function runAgentLoop(
 
     messages.push({ role: "assistant", content: resp.content });
     const results: any[] = [];
+    idleNudges = 0; // the model is acting again — it earned more nudges
 
     for (const block of resp.content.filter((c: any) => c.type === "tool_use")) {
       onEvent({ type: "tool_call", tool: block.name, args: block.input });
@@ -824,6 +863,7 @@ async function runAgentLoop(
         await invalidateAfter(block.name);
         resultStr = toolMemo.dedupe(block.name, cacheInfo.key, block.id, resultStr);
       }
+      opts.heartbeat?.();
       const cacheTag = cacheInfo.source === "live" ? "" : "(cached) ";
       onEvent({ type: "tool_result", tool: block.name, ok: !isError, preview: cacheTag + resultStr.slice(0, 200) });
       results.push({

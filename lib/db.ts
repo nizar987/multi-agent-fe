@@ -224,6 +224,28 @@ function migrate(d: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_board_notes_key ON board_notes(board_key, id);
 
+    /* ---------- agent runs (heartbeat + auto-resume, see lib/run-registry.ts) ---------- */
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id INTEGER NOT NULL,
+      conversation_id INTEGER NOT NULL,
+      surface TEXT NOT NULL DEFAULT 'chat',        -- chat | workspace
+      mode TEXT NOT NULL DEFAULT 'approval',
+      working_dir TEXT DEFAULT NULL,
+      board_key TEXT DEFAULT NULL,
+      model_override TEXT DEFAULT NULL,
+      -- running | done | incomplete | failed | error | interrupted | resumed | superseded
+      status TEXT NOT NULL DEFAULT 'running',
+      resume_of INTEGER DEFAULT NULL,
+      resume_count INTEGER NOT NULL DEFAULT 0,
+      error TEXT DEFAULT NULL,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_beat_at TEXT NOT NULL DEFAULT (datetime('now')),
+      ended_at TEXT DEFAULT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status, id);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_conv ON agent_runs(conversation_id, id);
+
     /* ---------- token usage log ---------- */
     CREATE TABLE IF NOT EXISTS token_usage (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

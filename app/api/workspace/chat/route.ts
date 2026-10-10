@@ -8,6 +8,7 @@
  */
 import { NextRequest } from "next/server";
 import { getDb } from "@/lib/db";
+import { startRun } from "@/lib/run-registry";
 import { runAgent, RunEvent, RunMode } from "@/lib/agent-runtime";
 import { hasSecret } from "@/lib/config";
 import type { AiMessage } from "@/lib/ai";
@@ -123,19 +124,25 @@ export async function POST(req: NextRequest) {
           .all(convId) as any[])
           .map(rowToAiMessage);
 
+        const boardKey = boardKeyFor(sessionId);
+        // Registered so the watchdog can resume it if it dies before finishing.
+        const run = startRun({ agentId, conversationId: convId, surface: "workspace", mode, workingDir: wsDir, boardKey, modelOverride });
         try {
           const finalText = await runAgent(agentId, history, (e) => send(agentId, e), 0, mode, {
             interactive: true,
             conversationId: convId,
+            heartbeat: run.beat,
             // Team board shared by every agent of this workspace session.
-            boardKey: boardKeyFor(sessionId),
+            boardKey,
             ...(modelOverride ? { modelOverride } : {}),
             ...(wsDir ? { workingDir: wsDir } : {}),
           });
           db.prepare("INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)")
             .run(convId, "assistant", finalText || "(no answer)");
+          run.complete();
           send(agentId, { type: "done", finalText });
         } catch (e: any) {
+          run.fail(e);
           const errMsg = `Error: ${e?.message ?? e}`;
           // Save the error to the conversation so it persists across page reloads
           db.prepare("INSERT INTO messages(conversation_id,role,content) VALUES(?,?,?)")
