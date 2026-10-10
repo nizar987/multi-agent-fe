@@ -94,6 +94,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         body.calendar_event_id === null ? null : String(body.calendar_event_id).trim();
     }
 
+    if (body.completed !== undefined) {
+      if (typeof body.completed !== "boolean") return badRequest("invalid_completed");
+      updates.completed = body.completed;
+    }
+
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ ok: true, data: task });
     }

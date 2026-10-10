@@ -21,6 +21,7 @@ export interface CreateTaskInput {
   priority: "low" | "medium" | "high";
   due_date?: string | null;
   calendar_event_id?: string | null;
+  completed?: boolean;
 }
 
 /**
@@ -142,14 +143,20 @@ export function getTasks(filters?: {
 export function updateTask(id: number, updates: Partial<CreateTaskInput>): Task {
   const db = getDb();
   
-  const allowedFields = ["title", "description", "project", "priority", "due_date", "calendar_event_id"];
+  const allowedFields = ["title", "description", "project", "priority", "due_date", "calendar_event_id", "completed"];
   const updateParts: string[] = [];
   const values: any[] = [];
   
   for (const [key, value] of Object.entries(updates)) {
     if (!allowedFields.includes(key)) continue;
     updateParts.push(`${key} = ?`);
-    values.push(key === "description" || key === "project" ? String(value).trim() : value);
+    if (key === "description" || key === "project") {
+      values.push(String(value).trim());
+    } else if (key === "completed") {
+      values.push(value ? 1 : 0);
+    } else {
+      values.push(value);
+    }
   }
   
   if (updateParts.length === 0) {
