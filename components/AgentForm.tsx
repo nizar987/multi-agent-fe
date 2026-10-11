@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import ModelSelect from "@/components/ModelSelect";
 import FolderPicker from "@/components/FolderPicker";
+import Icon from "@/components/Icon";
+import PageHeader from "@/components/PageHeader";
 
 type ToolStatus = { status: "connected" | "unconfigured" | "error" | "connecting"; detail: string };
 
@@ -109,12 +111,17 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
 
   return (
     <div className="form-wrap">
-      <h1>{agentId ? "Edit agent" : "New agent"}</h1>
+      <Link href="/" className="back-link"><Icon name="chevron-left" size={14} /> Agents</Link>
+      <PageHeader
+        title={agentId ? "Edit agent" : "New agent"}
+        subtitle="Give the agent a role, a system prompt and the tools it may use."
+      />
+      <div className="card form-card">
 
       <div className="field">
         <label>Avatar</label>
         <div className="row mb-2">
-          <span className="agent-avatar" style={{ width: 44, height: 44, fontSize: 24, background: color + "26", borderColor: color }}>{avatar}</span>
+          <span className="agent-avatar" style={{ width: 52, height: 52, fontSize: 28, background: color + "26", borderColor: color + "59" }}>{avatar}</span>
           <div>
             <div className="avatar-picker mb-2">
               {AVATARS.map((a) => (
@@ -252,16 +259,18 @@ export default function AgentForm({ agentId }: { agentId?: number }) {
         <FolderPicker
           value={workingDir}
           onChange={handleWorkingDirChange}
-          placeholder="📂 Select folder…"
+          placeholder="Select folder…"
           disabled={!agentId}
         />
       </div>
 
-      <div className="row">
+      </div>
+
+      <div className="form-actions">
+        <button className="btn btn-ghost" onClick={() => router.push("/")}>Cancel</button>
         <button className="btn btn-primary" onClick={save} disabled={saving} data-loading={saving}>
-          {saving && <span className="spinner" />} Save
+          {saving ? <span className="spinner" /> : <Icon name="check" size={14} />} Save agent
         </button>
-        <button className="btn" onClick={() => router.push("/")}>Cancel</button>
       </div>
     </div>
   );

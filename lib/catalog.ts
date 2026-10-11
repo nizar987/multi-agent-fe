@@ -23,8 +23,7 @@
 import crypto from "crypto";
 import type { PoolClient } from "pg";
 import { getDb, getMeta, setMeta } from "./db";
-import { getSecret } from "./config";
-import { getSharedPool, sharedDbConfigured, PG_NOW } from "./shared-db";
+import { getSharedPool, sharedDbConfigured, sharedDbUrl, sharedDbSource, SharedDbSource, PG_NOW } from "./shared-db";
 import { logger } from "./logger";
 
 export class SharedDbUnavailableError extends Error {
@@ -55,18 +54,20 @@ export function catalogMode(): CatalogMode {
 
 export interface SyncStatus {
   mode: CatalogMode;
+  /** Where the connection URL comes from: Settings (keychain) or .env. */
+  source: SharedDbSource | null;
   online: boolean | null;
   lastSyncAt: number | null;
   lastError: string | null;
   adoptedAction: "uploaded" | "downloaded" | null;
 }
 
-const status: SyncStatus = { mode: "local", online: null, lastSyncAt: null, lastError: null, adoptedAction: null };
+const status: SyncStatus = { mode: "local", source: null, online: null, lastSyncAt: null, lastError: null, adoptedAction: null };
 let inflight: Promise<SyncStatus> | null = null;
 let lastWarnAt = 0;
 
 export function catalogStatus(): SyncStatus {
-  return { ...status, mode: catalogMode() };
+  return { ...status, mode: catalogMode(), source: sharedDbSource() };
 }
 
 /* ---------- mirror (SQLite) ---------- */
@@ -141,7 +142,7 @@ function applyMirror(remote: Record<Table, Row[]>): void {
 /* ---------- adoption (first connection to a database URL) ---------- */
 
 function urlFingerprint(): string {
-  return crypto.createHash("sha256").update(getSecret("sharedDbUrl") ?? "").digest("hex").slice(0, 16);
+  return crypto.createHash("sha256").update(sharedDbUrl() ?? "").digest("hex").slice(0, 16);
 }
 
 /** Copy the local catalog into an EMPTY Postgres with the same ids. */

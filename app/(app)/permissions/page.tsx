@@ -1,14 +1,20 @@
 "use client";
 import AllowlistManager from "@/components/AllowlistManager";
+import PageHeader from "@/components/PageHeader";
 
 export default function PermissionsPage() {
   return (
-    <div>
-      <h1>Permissions</h1>
-      <section className="settings-section">
-        <h2>Always-Allowed Actions</h2>
-        <AllowlistManager />
-      </section>
+    <div className="page-narrow">
+      <PageHeader
+        title="Permissions"
+        subtitle={
+          <>
+            Actions on this list run <strong>without asking for approval</strong>. Entries are added when you
+            pick “Always allow” on an approval card, or manually below. Matching is exact.
+          </>
+        }
+      />
+      <AllowlistManager />
     </div>
   );
 }

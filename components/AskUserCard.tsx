@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import Icon from "@/components/Icon";
 
 export interface AskOption {
   label: string;
@@ -39,10 +40,10 @@ export default function AskUserCard({ item, onAnswer }: AskUserCardProps) {
 
   return (
     <div className="ask-card">
-      <div className="ask-question">❓ {item.question}</div>
+      <div className="ask-question"><Icon name="help" size={16} className="ask-question-icon" /> {item.question}</div>
 
       {answered ? (
-        <div className="ask-answered">✓ You answered: <strong>{item.answer}</strong></div>
+        <div className="ask-answered"><Icon name="check" size={13} /> You answered: <strong>{item.answer}</strong></div>
       ) : (
         <>
           <div className="ask-options">
@@ -54,7 +55,7 @@ export default function AskUserCard({ item, onAnswer }: AskUserCardProps) {
               >
                 <span className="ask-option-head">
                   <span className="ask-option-label">{o.label}</span>
-                  {o.recommended === true && <span className="ask-badge ask-badge--good">⭐ Recommended</span>}
+                  {o.recommended === true && <span className="ask-badge ask-badge--good"><Icon name="star" size={10} /> Recommended</span>}
                   {o.recommended === false && <span className="ask-badge ask-badge--bad">Not recommended</span>}
                 </span>
                 {o.description && <span className="ask-option-desc">{o.description}</span>}
@@ -64,7 +65,7 @@ export default function AskUserCard({ item, onAnswer }: AskUserCardProps) {
             {!showCustom && (
               <button className="ask-option ask-option--custom" onClick={() => setShowCustom(true)}>
                 <span className="ask-option-head">
-                  <span className="ask-option-label">✏️ Other…</span>
+                  <span className="ask-option-label"><Icon name="pencil" size={12} /> Other…</span>
                 </span>
                 <span className="ask-option-desc">Type your own answer</span>
               </button>

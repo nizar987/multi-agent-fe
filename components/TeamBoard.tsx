@@ -1,4 +1,5 @@
 "use client";
+import Icon from "@/components/Icon";
 /**
  * Team board section — notes the agents of a workspace session posted for each
  * other (board_post) and the files currently locked by running agents.
@@ -38,7 +39,7 @@ export default function TeamBoard({ notes, locks }: { notes: BoardNote[]; locks:
       )}
       {locks.length > 0 && (
         <>
-          <div className="progress-group-name" style={{ marginTop: 8 }}>🔒 Locked files</div>
+          <div className="progress-group-name" style={{ marginTop: 8 }}><Icon name="lock" size={12} /> Locked files</div>
           {locks.map((l) => (
             <div key={l.path} className="small mono" title={l.path} style={{ wordBreak: "break-all" }}>
               {l.path.split("/").slice(-2).join("/")} <span className="muted">— {l.agentName}</span>

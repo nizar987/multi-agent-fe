@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package agentplatform.v1;
+
+import "agentplatform/v1/common.proto";
+
+option py_generic_services = false;
+
+service LogService {
+  rpc ListLogs  (ListLogsRequest)  returns (ListLogsResponse);
+  rpc ClearLogs (ClearLogsRequest) returns (Empty);
+}
+
+message ListLogsRequest  {
+  int32 n = 1;  // number of recent lines, default 200, max 1000
+}
+
+message ListLogsResponse {
+  repeated string lines = 1;
+}
+
+message ClearLogsRequest {}

@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import Icon from "@/components/Icon";
 
 interface ConnectionView {
   id: number;
@@ -167,8 +168,8 @@ export default function NvidiaNimSection({ onChanged }: { onChanged?: () => void
       {/* ── connection list ─────────────────────────────────────────────── */}
       {conns.length === 0 && !formOpen ? (
         <div className="empty-state">
-          <div className="glyph">🚀</div>
-          No NVIDIA NIM connection yet.
+          <span className="glyph"><Icon name="rocket" size={22} /></span>
+          <span className="empty-state-title">No NVIDIA NIM connection yet</span>
           <button className="btn btn-primary" style={{ marginTop: 8 }} onClick={() => setFormOpen(true)}>
             + Add NVIDIA NIM
           </button>

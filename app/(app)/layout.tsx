@@ -1,4 +1,5 @@
 import Sidebar from "@/components/Sidebar";
+import MainContent from "@/components/MainContent";
 import OnboardingGate from "@/components/OnboardingGate";
 import ApprovalNotifier from "@/components/ApprovalNotifier";
 import KeyboardShortcuts from "@/components/KeyboardShortcuts";
@@ -8,7 +9,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <>
       <div className="app-shell">
         <Sidebar />
-        <main className="main-content" id="main-content">{children}</main>
+        <MainContent>{children}</MainContent>
       </div>
       <OnboardingGate />
       <ApprovalNotifier />

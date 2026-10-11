@@ -2,6 +2,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { statusBadge } from "./status";
+import Icon from "@/components/Icon";
+import PageHeader from "@/components/PageHeader";
 
 interface TaskRow {
   id: number;
@@ -48,40 +50,36 @@ export default function ManagerPage() {
 
   return (
     <div>
-      <div style={{ marginBottom: 20 }}>
-        <h1 style={{ margin: 0 }}>Agent Manager</h1>
-        <p className="muted small" style={{ marginTop: 6 }}>
-          A supervisor that plans a task across your agents, checks their work, asks for revisions,
-          and reports back.
-        </p>
-      </div>
+      <PageHeader
+        title="Agent Manager"
+        subtitle="A supervisor that plans a task across your agents, checks their work, asks for revisions, and reports back."
+      />
 
-      <div className="card" style={{ marginBottom: 24 }}>
-        <label className="small muted" style={{ display: "block", marginBottom: 6 }}>
-          What needs to be done?
-        </label>
+      <div className="card field" style={{ marginBottom: 28 }}>
+        <label>What needs to be done?</label>
         <textarea
+          className="input"
           value={request}
           onChange={(e) => setRequest(e.target.value)}
           onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit(); }}
           placeholder="e.g. Review the auth module in the repo and write a summary of the risks."
           rows={3}
-          style={{ width: "100%", resize: "vertical", boxSizing: "border-box" }}
         />
         {err && <div className="banner-danger" style={{ marginTop: 10 }}>{err}</div>}
         <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
           <button className="btn btn-primary" data-loading={busy} onClick={submit} disabled={busy || !request.trim()}>
-            {busy ? "Starting…" : "Start task"}
+            <Icon name="play" size={13} /> {busy ? "Starting…" : "Start task"}
           </button>
         </div>
       </div>
 
-      <h3 style={{ margin: "0 0 12px" }}>Tasks</h3>
+      <h2>Tasks</h2>
       {tasks === null && <div className="skeleton" style={{ height: 60 }} />}
       {tasks?.length === 0 && (
         <div className="empty-state">
-          <div className="glyph">🧭</div>
-          No tasks yet. Describe something above to get started.
+          <span className="glyph"><Icon name="compass" size={22} /></span>
+          <span className="empty-state-title">No tasks yet</span>
+          <span>Describe something above to get started.</span>
         </div>
       )}
       <div className="card-grid">

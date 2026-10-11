@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useState, useEffect, useCallback } from "react";
 import { PickedAttachment, readFileToAttachment } from "./attachments-client";
+import Icon, { type IconName } from "@/components/Icon";
 
 interface AttachmentBarProps {
   attachments: PickedAttachment[];
@@ -8,9 +9,9 @@ interface AttachmentBarProps {
   disabled?: boolean;
 }
 
-const FILE_ICON: Record<string, string> = {
-  document: "📄",
-  text: "📝",
+const FILE_ICON: Record<string, IconName> = {
+  document: "file",
+  text: "file-text",
 };
 
 const CODE_EXTS = /\.(js|jsx|ts|tsx|py|go|rs|java|sh|sql|html|css|json|yaml|yml|md|csv|toml|ini)$/i;
@@ -113,7 +114,7 @@ function TextPreviewModal({
         <div className="lightbox-body lightbox-body--text">
           {isPdf ? (
             <div className="preview-pdf-notice">
-              <span className="preview-pdf-icon">📄</span>
+              <Icon name="file" size={36} className="preview-pdf-icon" />
               <p>File PDF: <strong>{attachment.name}</strong></p>
               <p className="preview-pdf-size">
                 {Math.round((attachment.data?.length ?? 0) * 0.75 / 1024)} KB
@@ -234,7 +235,7 @@ export default function AttachmentBar({
                 </button>
               ) : (
                 <span className="attach-icon" aria-hidden="true">
-                  {FILE_ICON[a.kind] ?? "📎"}
+                  <Icon name={FILE_ICON[a.kind] ?? "paperclip"} size={14} />
                 </span>
               )}
 

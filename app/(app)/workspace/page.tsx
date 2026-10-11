@@ -17,6 +17,7 @@ import ConnectorModal from "@/components/ConnectorModal";
 import ModelSelect from "@/components/ModelSelect";
 import FolderPicker from "@/components/FolderPicker";
 import MessageBody, { ThinkingIndicator, ToolProgress } from "@/components/MessageBody";
+import Icon from "@/components/Icon";
 
 type WsMode = "parallel" | "manager";
 
@@ -349,7 +350,7 @@ export default function WorkspacePage() {
             [id]: {
               ...resp,
               done: true,
-              notices: [...resp.notices, "⏹ Stopped by user."],
+              notices: [...resp.notices, "Stopped by user."],
             },
           },
         };
@@ -661,7 +662,7 @@ export default function WorkspacePage() {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
         <div className="card" style={{ maxWidth: 400, textAlign: "center", padding: 32 }}>
-          <div style={{ fontSize: 28, marginBottom: 12 }}>◆</div>
+          <span className="glyph-tile"><Icon name="key" size={22} /></span>
           <h2>Connect an AI model first</h2>
           <p className="muted">The workspace needs an AI API key to run agents.</p>
           <Link href="/connections" className="btn btn-primary">Open Connections → AI Provider</Link>
@@ -674,19 +675,19 @@ export default function WorkspacePage() {
   const hasSidePanel = hasBoard || Object.values(wsTodos).some((l) => l.length > 0);
 
   return (
-    <div style={{ display: "flex", height: "calc(100vh - 64px)", margin: -32, overflow: "hidden" }}>
+    <div className="full-bleed" style={{ display: "flex" }}>
       {/* sessions history sidebar */}
       {historyCollapsed ? (
         <div className="ws-sessions-collapsed" onClick={() => setHistoryCollapsed(false)} title="Show history">
-          <span style={{ writingMode: "vertical-rl", fontSize: 12, color: "var(--text-tertiary)" }}>📋 History</span>
+          <span className="ws-sessions-collapsed-label"><Icon name="history" size={14} /> History</span>
         </div>
       ) : (
         <div className="ws-sessions-sidebar">
           <div className="ws-sessions-header">
             <span className="ws-sessions-title">History</span>
             <div style={{ display: "flex", gap: 4 }}>
-              <button className="btn ws-sessions-new" onClick={newSession} title="New session">+</button>
-              <button className="btn ws-sessions-new" onClick={() => setHistoryCollapsed(true)} title="Hide history">◀</button>
+              <button className="btn btn-ghost btn-icon btn-sm" onClick={newSession} title="New session" aria-label="New session"><Icon name="plus" size={15} /></button>
+              <button className="btn btn-ghost btn-icon btn-sm" onClick={() => setHistoryCollapsed(true)} title="Hide history" aria-label="Hide history"><Icon name="chevron-left" size={15} /></button>
             </div>
           </div>
           <div className="ws-sessions-list">
@@ -704,7 +705,8 @@ export default function WorkspacePage() {
                   className="ws-session-del"
                   onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}
                   title="Delete session"
-                >×</button>
+                  aria-label="Delete session"
+                ><Icon name="x" size={12} /></button>
               </div>
             ))}
           </div>
@@ -738,7 +740,8 @@ export default function WorkspacePage() {
             onClick={() => setProgressOpen((v) => !v)}
             title="Show/hide the agents' progress checklists and team board"
             disabled={!hasSidePanel}
-          >☑</button>
+            aria-label="Toggle progress panel"
+          ><Icon name="check-square" size={15} /></button>
           <button
             className={`btn btn-icon${previewTarget ? " active" : ""}`}
             onClick={() => setPreviewTarget(null)}
@@ -773,14 +776,14 @@ export default function WorkspacePage() {
                       onClick={() => stopAgent(id)}
                       title={`Stop ${a?.name ?? "agent"}`}
                       aria-label={`Stop ${a?.name ?? "agent"}`}
-                    >⏹</button>
+                    ><Icon name="stop" size={10} /></button>
                   ) : (
                     <button
                       className="ws-chip-x"
                       onClick={() => !busy && removeAgent(id)}
                       title="Remove from workspace"
                       aria-label={`Remove ${a?.name ?? "agent"} from workspace`}
-                    >×</button>
+                    ><Icon name="x" size={11} /></button>
                   )}
                 </span>
               </div>
@@ -843,16 +846,16 @@ export default function WorkspacePage() {
           <>
             {active.length === 0 && managerTaskIds.length === 0 && (
               <div className="empty-state">
-                <div className="glyph">🧭</div>
-                Pick the agents this task needs via <strong>+ Add agent</strong>,
-                then describe the task. The manager plans it across your team.
+                <span className="glyph"><Icon name="compass" size={22} /></span>
+                <span className="empty-state-title">Build a team</span>
+                <span>Pick the agents this task needs via <strong>+ Add agent</strong>, then describe the task. The manager plans it across your team.</span>
               </div>
             )}
             {active.length > 0 && managerTaskIds.length === 0 && (
               <div className="empty-state">
-                <div className="glyph">🧭</div>
-                Team ready ({active.length} agent{active.length > 1 ? "s" : ""}). Describe the task below —
-                the manager will delegate, review, and report back.
+                <span className="glyph"><Icon name="compass" size={22} /></span>
+                <span className="empty-state-title">Team ready · {active.length} agent{active.length > 1 ? "s" : ""}</span>
+                <span>Describe the task below — the manager will delegate, review, and report back.</span>
               </div>
             )}
             {managerTaskIds.map((tid) => (
@@ -864,15 +867,16 @@ export default function WorkspacePage() {
         {/* ---------- Parallel mode ---------- */}
         {wsMode === "parallel" && active.length === 0 && rounds.length === 0 && (
           <div className="empty-state">
-            <div className="glyph">🧩</div>
-            Add one or more agents via <strong>+ Add agent</strong>,
-            then send a single message for them to work on together.
+            <span className="glyph"><Icon name="workspace" size={22} /></span>
+            <span className="empty-state-title">Run agents in parallel</span>
+            <span>Add one or more agents via <strong>+ Add agent</strong>, then send a single message for them to work on together.</span>
           </div>
         )}
         {wsMode === "parallel" && active.length > 0 && rounds.length === 0 && (
           <div className="empty-state">
-            <div className="glyph">💬</div>
-            {active.length} agent{active.length > 1 ? "s" : ""} ready. Send your first message below.
+            <span className="glyph"><Icon name="chat" size={22} /></span>
+            <span className="empty-state-title">{active.length} agent{active.length > 1 ? "s" : ""} ready</span>
+            <span>Send your first message below.</span>
           </div>
         )}
 
@@ -885,7 +889,7 @@ export default function WorkspacePage() {
                 <div className="msg-attachments">
                   {round.atts.map((a, k) => a.previewUrl
                     ? <img key={k} src={a.previewUrl} alt={a.name} title={a.name} />
-                    : <span key={k} className="attach-chip"><span>{a.kind === "document" ? "📄" : "📝"}</span><span className="attach-name">{a.name}</span></span>)}
+                    : <span key={k} className="attach-chip"><Icon name={a.kind === "document" ? "file" : "file-text"} size={13} /><span className="attach-name">{a.name}</span></span>)}
                 </div>
               )}
               <div className="msg-actions">
@@ -994,19 +998,19 @@ export default function WorkspacePage() {
         </div>
         <div className="chat-input-actions">
           <div className="chat-input-action-left">
-            <button className="btn btn-sm btn-connector" onClick={() => setConnectorOpen(true)} title="Add or switch connections">🔗 Connector</button>
+            <button className="btn btn-sm btn-connector" onClick={() => setConnectorOpen(true)} title="Add or switch connections"><Icon name="link" size={13} /> Connector</button>
             <button
               className="btn btn-sm btn-upload"
               onClick={() => fileInputRef.current?.click()}
               disabled={busy || active.length === 0}
               title="Upload file (PDF, teks, kode)"
-            >📎 File</button>
+            ><Icon name="paperclip" size={13} /> File</button>
             <button
               className="btn btn-sm btn-upload"
               onClick={() => photoInputRef.current?.click()}
               disabled={busy || active.length === 0}
               title="Upload foto / gambar"
-            >🖼 Foto</button>
+            ><Icon name="image" size={13} /> Photo</button>
             <input
               ref={fileInputRef}
               type="file"
@@ -1026,7 +1030,7 @@ export default function WorkspacePage() {
           </div>
           <div className="chat-input-action-right">
             {rounds.length > 0 && (
-              <button className="btn btn-sm btn-ghost-danger" onClick={clearWs} title="Clear workspace history">🧹 Clear</button>
+              <button className="btn btn-sm btn-ghost-danger" onClick={clearWs} title="Clear workspace history"><Icon name="eraser" size={13} /> Clear</button>
             )}
           </div>
         </div>

@@ -4,8 +4,13 @@
  * the same catalog. Everything else (conversations, memory, usage, runs…)
  * stays in the local SQLite file.
  *
- * Configured by the `sharedDbUrl` secret (Settings → Shared database). When it
- * is not set, the app keeps using SQLite only (see lib/catalog.ts).
+ * Configured by the `sharedDbUrl` secret (Settings → Shared database, stored in
+ * the OS keychain), or — as a fallback — the SHARED_DATABASE_URL environment
+ * variable (.env). The Settings value wins. When neither is set, the app keeps
+ * using SQLite only (see lib/catalog.ts).
+ *
+ * Note: Next.js copies .env into the standalone build, so a URL in .env ends up
+ * inside the packaged app — fine for a private build, not for one you share.
  */
 import type { Pool } from "pg";
 import { configEvents, getSecret } from "./config";
@@ -51,8 +56,22 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_knowledge_agent ON knowledge(agent_id);
 `;
 
+export type SharedDbSource = "settings" | "env";
+
+/** Where the connection URL comes from (null = not configured). */
+export function sharedDbSource(): SharedDbSource | null {
+  if (getSecret("sharedDbUrl")) return "settings";
+  if (process.env.SHARED_DATABASE_URL?.trim()) return "env";
+  return null;
+}
+
+/** The connection URL: Settings (keychain) first, then SHARED_DATABASE_URL. */
+export function sharedDbUrl(): string | null {
+  return getSecret("sharedDbUrl") || process.env.SHARED_DATABASE_URL?.trim() || null;
+}
+
 export function sharedDbConfigured(): boolean {
-  return !!getSecret("sharedDbUrl");
+  return sharedDbUrl() !== null;
 }
 
 /**
@@ -71,7 +90,7 @@ function connectionOptions(raw: string): { connectionString: string; ssl: false 
 
 /** Pool for the shared DB with the schema ensured, or null when not configured. */
 export async function getSharedPool(): Promise<Pool | null> {
-  const raw = getSecret("sharedDbUrl");
+  const raw = sharedDbUrl();
   if (!raw) return null;
   if (!pool) {
     const { Pool: PgPool } = await import("pg");

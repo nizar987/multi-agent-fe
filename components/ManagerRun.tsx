@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import AgentAvatar from "@/components/AgentAvatar";
 import { statusBadge, assignmentBadge, eventLabel } from "@/app/(app)/manager/status";
+import Icon from "@/components/Icon";
 
 interface Assignment {
   id: number;
@@ -136,7 +137,7 @@ export default function ManagerRun({ taskId, agents }: ManagerRunProps) {
       {/* Header */}
       <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
-          <span className="muted small">🧭 Manager task</span>
+          <span className="muted small row" style={{ gap: 5 }}><Icon name="compass" size={12} /> Manager task</span>
           <div style={{ fontWeight: 600 }}>{task.title}</div>
         </div>
         <span className={`badge ${tb.cls}`}>
@@ -170,7 +171,7 @@ export default function ManagerRun({ taskId, agents }: ManagerRunProps) {
                   style={{ borderStyle: "dashed", color: "var(--text-secondary)" }}
                   onClick={() => { setCustomMode(true); setAnswer(""); }}
                 >
-                  ✏️ Custom answer…
+                  <Icon name="pencil" size={12} /> Custom answer…
                 </button>
               </div>
             ) : (
@@ -249,7 +250,7 @@ export default function ManagerRun({ taskId, agents }: ManagerRunProps) {
                       style={{ padding: "2px 8px", fontSize: 11 }}
                       onClick={() => toggleExpand(a.id)}
                     >
-                      {isExpanded ? "▲" : "▼"}
+                      <Icon name="chevron-down" size={13} className={isExpanded ? "rot-180" : undefined} />
                     </button>
                   </span>
                 </div>
@@ -319,7 +320,7 @@ export default function ManagerRun({ taskId, agents }: ManagerRunProps) {
                     {hasPlan && (
                       <details open={false}>
                         <summary className="muted small" style={{ cursor: "pointer", fontWeight: 600 }}>
-                          🗒 Plan
+                          <Icon name="list" size={13} /> Plan
                         </summary>
                         <pre style={{
                           whiteSpace: "pre-wrap",
@@ -346,7 +347,7 @@ export default function ManagerRun({ taskId, agents }: ManagerRunProps) {
                         alignItems: "center",
                         gap: 6,
                       }}>
-                        📄 Result
+                        <Icon name="file-text" size={13} /> Result
                         {isWorking && (
                           <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(updating…)</span>
                         )}

@@ -8,6 +8,7 @@
  * endpoints the inline chat cards use.
  */
 import { useEffect, useRef, useState } from "react";
+import Icon, { type IconName } from "@/components/Icon";
 
 interface PendingApproval {
   id: string;
@@ -24,12 +25,12 @@ interface PausedRun {
   createdAt: number;
 }
 
-const KIND_ICON: Record<string, string> = {
-  shell: "❯_",
-  database: "🗄",
-  redis: "⚡",
-  env: "🔑",
-  learning: "🧠",
+const KIND_ICON: Record<string, IconName> = {
+  shell: "terminal",
+  database: "database",
+  redis: "layers",
+  env: "key",
+  learning: "brain",
 };
 
 const POLL_MS = 4000;
@@ -117,13 +118,13 @@ export default function ApprovalNotifier() {
       {paused.map((p) => (
         <div key={p.id} className="approval-notifier-card approval-notifier-card--offline">
           <div className="approval-notifier-head">
-            <span>📡</span>
+            <span className="approval-notifier-icon approval-notifier-icon--danger"><Icon name="radio" size={15} /></span>
             <strong>Connection lost — {p.agentName} is paused</strong>
           </div>
           <pre className="approval-notifier-detail">{p.reason}</pre>
           <div className="approval-notifier-actions">
             <button className="btn btn-primary" onClick={() => decidePause(p.id, "retry")} title="Retry the AI call and continue the run">
-              ↻ Retry
+              <Icon name="refresh" size={14} /> Retry
             </button>
             <button className="btn btn-danger-ghost" onClick={() => decidePause(p.id, "cancel")} title="Stop this run">
               Cancel run
@@ -136,7 +137,7 @@ export default function ApprovalNotifier() {
         return (
           <div key={p.id} className="approval-notifier-card">
             <div className="approval-notifier-head">
-              <span>{KIND_ICON[p.kind] ?? "⚠"}</span>
+              <span className="approval-notifier-icon"><Icon name={KIND_ICON[p.kind] ?? "alert"} size={15} /></span>
               <strong>Approval needed — {p.kind}</strong>
               <span className="muted small" title="Auto-denied when the timer runs out">
                 {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, "0")}

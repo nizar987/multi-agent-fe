@@ -9,15 +9,24 @@ export const metadata = { title: "Agent Platform" };
 // does not strip or defer it.
 const themeInitScript = `
 (function () {
+  var root = document.documentElement;
+  // Desktop shell (electron/preload.js) — lets CSS adapt to native chrome.
+  var desktop = window.desktop;
+  if (desktop) {
+    root.classList.add('desktop');
+    if (desktop.platform === 'darwin') root.classList.add('desktop-mac');
+    if (desktop.vibrancy) root.classList.add('vibrancy');
+  }
   try {
     var t = localStorage.getItem('agent_platform_theme');
     if (t === 'light' || t === 'dark') {
-      document.documentElement.dataset.theme = t;
+      root.dataset.theme = t;
     } else {
       // 'system' or unset — remove the attribute so CSS prefers-color-scheme
       // takes over naturally.
-      delete document.documentElement.dataset.theme;
+      delete root.dataset.theme;
     }
+    if (desktop && desktop.setTheme) desktop.setTheme(t || 'system');
   } catch (e) { /* localStorage blocked (private mode etc.) — ignore */ }
 })();
 `.trim();

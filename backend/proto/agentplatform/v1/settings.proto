@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package agentplatform.v1;
+
+option py_generic_services = false;
+
+service SettingsService {
+  rpc GetConfig    (GetConfigRequest)     returns (ConfigResponse);
+  rpc UpdateConfig (UpdateConfigRequest)  returns (ConfigResponse);
+  rpc GetSecretMeta(GetSecretMetaRequest) returns (SecretMetaResponse);
+}
+
+message GetConfigRequest {}
+
+message AiConfig {
+  string base_url     = 1;
+  string model        = 2;
+  string provider     = 3;
+  string vision_model = 4;
+}
+
+message GitlabConfig {
+  string api_url = 1;
+}
+
+message FilesystemConfig {
+  repeated string allowed_dirs = 1;
+}
+
+message ContextConfig {
+  bool  limit_enabled = 1;
+  int32 max_tokens    = 2;
+}
+
+message UiConfig {
+  string theme = 1;  // system | light | dark
+}
+
+message ConfigResponse {
+  AiConfig         ai              = 1;
+  GitlabConfig     gitlab          = 2;
+  FilesystemConfig filesystem      = 3;
+  ContextConfig    context         = 4;
+  UiConfig         ui              = 5;
+  bool             onboarding_done = 6;
+}
+
+message UpdateConfigRequest {
+  AiConfig         ai              = 1;
+  GitlabConfig     gitlab          = 2;
+  FilesystemConfig filesystem      = 3;
+  ContextConfig    context         = 4;
+  UiConfig         ui              = 5;
+  bool             onboarding_done = 6;
+}
+
+message GetSecretMetaRequest {}
+
+message SecretMeta {
+  string name       = 1;
+  bool   is_set     = 2;
+  string tail       = 3;  // last 4 chars, empty if not set
+}
+
+message SecretMetaResponse {
+  repeated SecretMeta secrets        = 1;
+  string              backend_label  = 2;
+  bool                backend_secure = 3;
+}

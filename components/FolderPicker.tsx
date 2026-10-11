@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import Icon from "@/components/Icon";
 
 type Props = {
   /** Currently selected folder (empty string = none). */
@@ -21,7 +22,7 @@ type Props = {
  *  - If history is empty → directly open native dialog (POST)
  *  - If history exists → show dropdown with past folders + "Browse new…"
  */
-export default function FolderPicker({ value, onChange, placeholder = "📁 Working folder", disabled = false }: Props) {
+export default function FolderPicker({ value, onChange, placeholder = "Working folder", disabled = false }: Props) {
   const [history, setHistory] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -94,10 +95,10 @@ export default function FolderPicker({ value, onChange, placeholder = "📁 Work
         >
           {loading
             ? <><span className="spinner" /> Opening…</>
-            : <><span className="folder-picker-icon">📁</span><span className="folder-picker-label">{label}</span></>
+            : <><Icon name="folder" size={14} className="folder-picker-icon" /><span className="folder-picker-label">{label}</span></>
           }
           {history.length > 0 && !loading && (
-            <span className="folder-picker-chevron">{open ? "▲" : "▼"}</span>
+            <Icon name="chevron-down" size={13} className={`folder-picker-chevron${open ? " rot-180" : ""}`} />
           )}
         </button>
 
@@ -108,7 +109,8 @@ export default function FolderPicker({ value, onChange, placeholder = "📁 Work
             onClick={() => onChange("")}
             title="Clear working folder"
             disabled={disabled}
-          >×</button>
+            aria-label="Clear working folder"
+          ><Icon name="x" size={13} /></button>
         )}
       </div>
 
@@ -125,12 +127,12 @@ export default function FolderPicker({ value, onChange, placeholder = "📁 Work
               onClick={() => selectFromHistory(f)}
               title={f}
             >
-              <span className="folder-picker-item-icon">📁</span>
+              <Icon name="folder" size={14} className="folder-picker-item-icon" />
               <span className="folder-picker-item-path">
                 <span className="folder-picker-item-name">{shortName(f)}</span>
                 <span className="folder-picker-item-full">{f}</span>
               </span>
-              {f === value && <span className="folder-picker-item-check">✓</span>}
+              {f === value && <Icon name="check" size={14} className="folder-picker-item-check" />}
             </button>
           ))}
           <div className="folder-picker-menu-divider" />
@@ -139,7 +141,7 @@ export default function FolderPicker({ value, onChange, placeholder = "📁 Work
             className="folder-picker-item folder-picker-browse"
             onClick={browseNew}
           >
-            <span className="folder-picker-item-icon">📂</span>
+            <Icon name="folder-open" size={14} className="folder-picker-item-icon" />
             <span className="folder-picker-item-name">Browse new folder…</span>
           </button>
         </div>

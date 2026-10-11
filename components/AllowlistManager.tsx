@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import Icon from "@/components/Icon";
 
 type Kind = "shell" | "database" | "redis" | "env" | "learning";
 
@@ -12,10 +13,10 @@ interface Entry {
 
 const KIND_LABELS: Record<Kind, string> = {
   shell: "⌘ Shell",
-  database: "🗄 SQL",
-  redis: "⚡ Redis",
-  env: "🔑 .env",
-  learning: "🧠 Knowledge/skill",
+  database: "SQL",
+  redis: "Redis",
+  env: ".env",
+  learning: "Catalog changes",
 };
 
 /** Manage "Always allow" approval entries — actions here run without asking. */
@@ -46,35 +47,39 @@ export default function AllowlistManager() {
 
   return (
     <div>
-      <p className="muted small" style={{ marginTop: 0 }}>
-        Actions on this list run <strong>without asking for approval</strong>. Entries are added when
-        you pick “Always allow” on an approval card, or manually below. Matching is exact.
-      </p>
-
       {entries.length === 0 && (
-        <div className="empty-state" style={{ padding: 20 }}>
-          <div className="glyph">🛡</div>
-          Nothing is always-allowed yet. Choose “Always allow” on an approval card to add an entry.
+        <div className="empty-state">
+          <span className="glyph"><Icon name="permissions" size={22} /></span>
+          <span className="empty-state-title">Nothing is always-allowed yet</span>
+          <span>Choose “Always allow” on an approval card, or add an entry below.</span>
         </div>
       )}
 
-      {entries.map((e) => (
-        <div key={e.id} className="list-row" style={{ padding: "8px 12px", alignItems: "center" }}>
-          <span className="tag" style={{ flex: "none" }}>{KIND_LABELS[e.kind]}</span>
-          <code className="grow" style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.detail}>
-            {e.detail}
-          </code>
-          <button className="btn btn-danger-ghost" onClick={() => remove(e.id)} title="Remove — this action will ask for approval again" style={{ fontSize: 12, padding: "4px 10px" }}>×</button>
+      {entries.length > 0 && (
+        <div className="item-list">
+          {entries.map((e) => (
+            <div key={e.id} className="item-row">
+              <span className="tag" style={{ flex: "none", minWidth: 64, justifyContent: "center" }}>{KIND_LABELS[e.kind]}</span>
+              <div className="item-row-main">
+                <code className="item-row-sub" style={{ color: "var(--text-primary)" }} title={e.detail}>{e.detail}</code>
+              </div>
+              <div className="item-row-actions">
+                <button className="btn btn-danger-ghost btn-icon btn-sm" onClick={() => remove(e.id)} title="Remove — this action will ask for approval again" aria-label="Remove entry">
+                  <Icon name="x" size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
 
-      <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
+      <div className="card" style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center", padding: 10 }}>
         <select className="input" style={{ width: 130, flex: "none" }} value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
           <option value="shell">Shell</option>
           <option value="database">SQL</option>
           <option value="redis">Redis</option>
           <option value="env">.env read</option>
-          <option value="learning">Knowledge/skill edit</option>
+          <option value="learning">Agent/skill/knowledge change</option>
         </select>
         <input
           className="input mono"
@@ -84,7 +89,7 @@ export default function AllowlistManager() {
           onKeyDown={(e) => { if (e.key === "Enter") add(); }}
           placeholder={kind === "shell" ? "exact command, e.g. npm test" : "exact detail to always allow"}
         />
-        <button className="btn" onClick={add} disabled={!detail.trim()}>+ Add</button>
+        <button className="btn btn-primary" onClick={add} disabled={!detail.trim()}><Icon name="plus" size={14} strokeWidth={2.2} /> Add</button>
       </div>
     </div>
   );

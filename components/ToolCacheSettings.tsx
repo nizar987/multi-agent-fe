@@ -82,10 +82,10 @@ export default function ToolCacheSettings() {
         <>
           <div className="field">
             <label>Storage</label>
-            <div className="row">
-              <button className={`btn${info.backend === "memory" ? " btn-primary" : ""}`} disabled={busy}
+            <div className="segmented" role="radiogroup" aria-label="Tool cache storage">
+              <button role="radio" aria-checked={info.backend === "memory"} className={`segmented-item${info.backend === "memory" ? " active" : ""}`} disabled={busy}
                 onClick={() => setBackend("memory")}>In-memory</button>
-              <button className={`btn${info.backend === "redis" ? " btn-primary" : ""}`} disabled={busy}
+              <button role="radio" aria-checked={info.backend === "redis"} className={`segmented-item${info.backend === "redis" ? " active" : ""}`} disabled={busy}
                 onClick={() => setBackend("redis")}>Redis</button>
             </div>
             <div className="hint" style={{ marginTop: 6 }}>

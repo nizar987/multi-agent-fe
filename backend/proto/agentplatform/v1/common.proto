@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package agentplatform.v1;
+
+option py_generic_services = false;
+
+// Empty message for RPCs that return nothing
+message Empty {}
+
+// Pagination request fields (embed in list requests)
+message PageRequest {
+  int32 page     = 1;  // 1-based
+  int32 per_page = 2;  // default 50, max 200
+}
+
+// Pagination response metadata
+message PageMeta {
+  int32 total    = 1;
+  int32 page     = 2;
+  int32 per_page = 3;
+}

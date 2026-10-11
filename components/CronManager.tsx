@@ -20,6 +20,8 @@ import {
   Freq, FriendlySchedule, DAY_NAMES, DEFAULT_SCHEDULE,
   parseSchedule, buildSchedule, describeCron,
 } from "@/lib/schedule";
+import Icon from "@/components/Icon";
+import AgentAvatar from "@/components/AgentAvatar";
 
 export default function CronManager() {
   const [jobs, setJobs] = useState<CronJob[]>([]);
@@ -70,50 +72,51 @@ export default function CronManager() {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <span className="muted small">Schedule agent tasks to run automatically.</span>
+      <div className="toolbar">
+        <span className="muted small">{jobs.length} schedule{jobs.length === 1 ? "" : "s"} · {jobs.filter((j) => j.enabled).length} active</span>
         <span style={{ flex: 1 }} />
-        <button className="btn btn-primary" onClick={() => { setEditing(null); setShowForm(true); }}>+ New schedule</button>
+        <button className="btn btn-primary" onClick={() => { setEditing(null); setShowForm(true); }}><Icon name="plus" size={15} strokeWidth={2.2} /> New schedule</button>
       </div>
 
       {jobs.length === 0 && !showForm && (
-        <div className="empty-state" style={{ padding: 24 }}>
-          <div className="glyph">⏰</div>
-          No cron jobs yet. Create one to schedule agent tasks.
+        <div className="empty-state">
+          <span className="glyph"><Icon name="schedules" size={22} /></span>
+          <span className="empty-state-title">No schedules yet</span>
+          <span>Create one to run an agent task automatically.</span>
         </div>
       )}
 
-      {jobs.map((job) => (
-        <div key={job.id} className="list-row" style={{ alignItems: "flex-start", padding: "10px 12px" }}>
-          <span style={{ fontSize: 20, marginTop: 2 }}>{job.agent_avatar || "🤖"}</span>
-          <div className="grow">
-            <div style={{ fontWeight: 500 }}>{job.name}</div>
-            <div className="muted small" style={{ marginTop: 2 }}>
-              {job.agent_name} · <span title={job.schedule}>⏰ {describeCron(job.schedule)}</span>
-            </div>
-            <div className="muted small" style={{ marginTop: 4, fontSize: 12, opacity: 0.7 }}>
-              {job.prompt.slice(0, 100)}{job.prompt.length > 100 ? "…" : ""}
-            </div>
-            {job.last_run && (
-              <div className="muted small" style={{ marginTop: 4, fontSize: 11 }}>
-                Last run: {new Date(job.last_run).toLocaleString()}
+      {jobs.length > 0 && (
+        <div className="item-list">
+          {jobs.map((job) => (
+            <div key={job.id} className={`item-row${job.enabled ? "" : " item-row--muted"}`}>
+              <AgentAvatar avatar={job.agent_avatar} size={32} name={job.agent_name} />
+              <div className="item-row-main">
+                <div className="item-row-title"><strong>{job.name}</strong></div>
+                <div className="item-row-sub">
+                  {job.agent_name} · <span title={job.schedule}>{describeCron(job.schedule)}</span>
+                </div>
+                <div className="item-row-meta">
+                  {job.prompt.slice(0, 100)}{job.prompt.length > 100 ? "…" : ""}
+                  {job.last_run && <> · last run {new Date(job.last_run).toLocaleString()}</>}
+                </div>
               </div>
-            )}
-          </div>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <button
-              className={`btn ${job.enabled ? "btn-success" : ""}`}
-              onClick={() => toggle(job)}
-              title={job.enabled ? "Disable" : "Enable"}
-              style={{ fontSize: 12, padding: "4px 10px" }}
-            >
-              {job.enabled ? "✓ On" : "Off"}
-            </button>
-            <button className="btn" onClick={() => { setEditing(job); setShowForm(true); }} style={{ fontSize: 12, padding: "4px 10px" }}>Edit</button>
-            <button className="btn btn-danger-ghost" onClick={() => remove(job.id)} style={{ fontSize: 12, padding: "4px 10px" }}>×</button>
-          </div>
+              <div className="item-row-actions">
+                <button className="btn btn-ghost btn-icon btn-sm" onClick={() => { setEditing(job); setShowForm(true); }} title="Edit" aria-label={`Edit ${job.name}`}>
+                  <Icon name="pencil" size={14} />
+                </button>
+                <button className="btn btn-danger-ghost btn-icon btn-sm" onClick={() => remove(job.id)} title="Delete" aria-label={`Delete ${job.name}`}>
+                  <Icon name="trash" size={14} />
+                </button>
+              </div>
+              <label className="switch" title={job.enabled ? "Disable" : "Enable"}>
+                <input type="checkbox" checked={!!job.enabled} onChange={() => toggle(job)} aria-label={`${job.enabled ? "Disable" : "Enable"} ${job.name}`} />
+                <span className="switch-track" aria-hidden />
+              </label>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
 
       {showForm && (
         <CronForm
@@ -154,7 +157,7 @@ function CronForm({ job, agents, onSave, onCancel }: {
         <label>Agent</label>
         <select className="input" value={agentId} onChange={(e) => setAgentId(Number(e.target.value))}>
           {agents.map((a) => (
-            <option key={a.id} value={a.id}>{a.avatar || "🤖"} {a.name}</option>
+            <option key={a.id} value={a.id}>{a.avatar ? `${a.avatar} ` : ""}{a.name}</option>
           ))}
         </select>
       </div>
@@ -229,7 +232,7 @@ function CronForm({ job, agents, onSave, onCancel }: {
           )}
         </div>
         <div className="hint" style={{ marginTop: 6 }}>
-          ⏰ Runs: <strong>{describeCron(schedule)}</strong>
+          Runs: <strong>{describeCron(schedule)}</strong>
         </div>
       </div>
       <div className="field">

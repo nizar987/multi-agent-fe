@@ -1,23 +1,25 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import Icon, { type IconName } from "@/components/Icon";
+import PageHeader from "@/components/PageHeader";
 
 type ToolState = "connected" | "unconfigured" | "error" | "connecting";
 type ToolStatus = { status: ToolState; detail: string };
 type StatusResponse = { tools: Record<string, ToolStatus>; ai: "configured" | "unconfigured" };
 
-const TOOL_META: Record<string, { label: string; icon: string; blurb: string }> = {
-  filesystem: { label: "Filesystem", icon: "📁", blurb: "Read/write files in allowed folders" },
-  github: { label: "GitHub", icon: "🐙", blurb: "Repos, issues & PRs via REST API" },
-  tavily: { label: "Tavily", icon: "🔎", blurb: "Web search, extract, crawl & map (REST API)" },
-  tavily_mcp: { label: "Tavily MCP", icon: "🌐", blurb: "Hosted remote MCP (mcp.tavily.com)" },
-  gitlab: { label: "GitLab", icon: "🦊", blurb: "Repos & issues via GitLab MCP" },
-  database: { label: "Database", icon: "🗄", blurb: "SQL queries (Postgres / MySQL)" },
-  redis: { label: "Redis", icon: "🧱", blurb: "Key/value cache access" },
-  env: { label: "Env", icon: "🔑", blurb: "Reads .env from the working folder" },
-  monitoring: { label: "Monitoring", icon: "📈", blurb: "Grafana / Prometheus / Loki" },
-  vision: { label: "Vision (read_image)", icon: "👁", blurb: "Agents read attached images via a vision model" },
-  video: { label: "Video editing", icon: "🎬", blurb: "ffmpeg: trim, concat, transcode, subtitles & AI transcription" },
+const TOOL_META: Record<string, { label: string; icon: IconName; blurb: string }> = {
+  filesystem: { label: "Filesystem", icon: "folder", blurb: "Read/write files in allowed folders" },
+  github: { label: "GitHub", icon: "github", blurb: "Repos, issues & PRs via REST API" },
+  tavily: { label: "Tavily", icon: "search", blurb: "Web search, extract, crawl & map (REST API)" },
+  tavily_mcp: { label: "Tavily MCP", icon: "globe", blurb: "Hosted remote MCP (mcp.tavily.com)" },
+  gitlab: { label: "GitLab", icon: "gitlab", blurb: "Repos & issues via GitLab MCP" },
+  database: { label: "Database", icon: "database", blurb: "SQL queries (Postgres / MySQL)" },
+  redis: { label: "Redis", icon: "layers", blurb: "Key/value cache access" },
+  env: { label: "Env", icon: "key", blurb: "Reads .env from the working folder" },
+  monitoring: { label: "Monitoring", icon: "monitoring", blurb: "Grafana / Prometheus / Loki" },
+  vision: { label: "Vision (read_image)", icon: "eye", blurb: "Agents read attached images via a vision model" },
+  video: { label: "Video editing", icon: "video", blurb: "ffmpeg: trim, concat, transcode, subtitles & AI transcription" },
 };
 
 const DOT: Record<ToolState, string> = {
@@ -58,44 +60,44 @@ export default function ToolsPage() {
   const entries = data ? Object.entries(data.tools) : [];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0 }}>Tools</h1>
-        <span className="muted small">Connection status for every tool agents can use.</span>
-        <span style={{ flex: 1 }} />
-        <button className="btn" onClick={load} disabled={loading}>
-          {loading ? "Refreshing…" : "↻ Refresh"}
-        </button>
-        <Link href="/settings" className="btn btn-primary">Configure in Settings</Link>
-      </div>
+    <div>
+      <PageHeader
+        title="Tools"
+        subtitle="Connection status for every tool agents can use."
+        actions={
+          <>
+            <button className="btn" onClick={load} disabled={loading}>
+              <Icon name="refresh" size={14} className={loading ? "spin" : undefined} /> {loading ? "Refreshing…" : "Refresh"}
+            </button>
+            <Link href="/connections" className="btn btn-primary">Configure connections</Link>
+          </>
+        }
+      />
 
-      {err && (
-        <div className="card" style={{ borderColor: "var(--danger)", color: "var(--danger)" }}>
-          {err}
-        </div>
-      )}
+      {err && <div className="banner-danger">{err}</div>}
 
       {loading && !data ? (
-        <div className="muted" style={{ padding: 32, textAlign: "center" }}>Loading tool status…</div>
+        <div className="card-grid">
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="card"><div className="skeleton mb-2" style={{ width: "40%" }} /><div className="skeleton" /></div>
+          ))}
+        </div>
       ) : (
         <div className="card-grid">
           {entries.map(([key, st]) => {
-            const meta = TOOL_META[key] ?? { label: key, icon: "🔧", blurb: "" };
+            const meta = TOOL_META[key] ?? { label: key, icon: "tools" as const, blurb: "" };
             return (
-              <div key={key} className="card" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 18 }}>{meta.icon}</span>
+              <div key={key} className="card tool-card">
+                <div className="tool-card-head">
+                  <span className="item-row-icon"><Icon name={meta.icon} size={16} /></span>
                   <strong>{meta.label}</strong>
-                  <span style={{ flex: 1 }} />
-                  <span className="tag" style={{ gap: 6 }}>
+                  <span className={`status-pill status-pill--${st.status}`}>
                     <span className={`dot ${DOT[st.status]}`} />
                     {STATE_LABEL[st.status]}
                   </span>
                 </div>
                 {meta.blurb && <div className="muted small">{meta.blurb}</div>}
-                <div className="small" style={{ color: "var(--text-tertiary)", wordBreak: "break-word" }}>
-                  {st.detail}
-                </div>
+                {st.detail && <div className="tool-card-detail">{st.detail}</div>}
               </div>
             );
           })}

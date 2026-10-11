@@ -19,7 +19,8 @@ import { setTodos, getTodos, todosPrompt, journalPrompt, logAssignment, TodoInpu
 import { cronToolDefs, callCronTool } from "./tools-cron";
 import { learningToolDefs, callLearningTool, learningPrompt, learningNotesPrompt } from "./tools-learning";
 import { withToolCache, invalidateAfter, RunToolMemo, CachedResult } from "./tool-cache";
-import { claimForWrite, releaseFileLocks, newLockOwnerId } from "./file-locks";
+import { claimForWrite, releaseFileLocks, newLockOwnerId, writeTargets } from "./file-locks";
+import { catalogToolDefs, callCatalogTool, CATALOG_PROMPT, touchesLocalDb, LOCAL_DB_BLOCKED } from "./tools-catalog";
 import { syncShared } from "./catalog";
 import {
   MAX_IDLE_NUDGES, MAX_TOTAL_NUDGES, TRANSIENT_RETRY_DELAYS_MS,
@@ -270,7 +271,7 @@ function delegateToolDef(exceptAgentId: number): AiTool {
 
 async function assembleTools(agent: AgentRow): Promise<{
   defs: AiTool[];
-  route: Map<string, { kind: "mcp"; server: McpServerName; tool: string } | { kind: "github" } | { kind: "tavily" } | { kind: "video" } | { kind: "memory" } | { kind: "delegate" } | { kind: "shell" } | { kind: "database" } | { kind: "redis" } | { kind: "env" } | { kind: "monitoring" } | { kind: "ask" } | { kind: "cron" } | { kind: "vision" } | { kind: "progress" } | { kind: "learning" } | { kind: "board" }>;
+  route: Map<string, { kind: "mcp"; server: McpServerName; tool: string } | { kind: "github" } | { kind: "tavily" } | { kind: "video" } | { kind: "memory" } | { kind: "delegate" } | { kind: "shell" } | { kind: "database" } | { kind: "redis" } | { kind: "env" } | { kind: "monitoring" } | { kind: "ask" } | { kind: "cron" } | { kind: "vision" } | { kind: "progress" } | { kind: "learning" } | { kind: "board" } | { kind: "catalog" }>;
   notices: string[];
 }> {
   const enabled: string[] = JSON.parse(agent.tools || "[]");
@@ -469,6 +470,8 @@ async function runAgentLoop(
   }
   // Self-learning: every agent can save its own memory, knowledge and skills.
   for (const d of learningToolDefs) { defs.push(d); route.set(d.name, { kind: "learning" }); }
+  // Catalog: create/edit agents, skills and knowledge (→ shared DB when configured).
+  for (const d of catalogToolDefs) { defs.push(d); route.set(d.name, { kind: "catalog" }); }
   // Team board — only when this run is part of a multi-agent session/task.
   if (opts.boardKey) {
     for (const d of boardToolDefs) { defs.push(d); route.set(d.name, { kind: "board" }); }
@@ -514,7 +517,7 @@ async function runAgentLoop(
   // Prompt caching: `system` holds text that stays identical across runs and
   // across the iterations of this run (cached by the provider). Anything that
   // changes from run to run goes in `systemDynamic`, sent after it.
-  let system = buildSystemPrompt(agent) + learningPrompt();
+  let system = buildSystemPrompt(agent) + learningPrompt() + CATALOG_PROMPT;
   let systemDynamic = "";
   // Agents that can write files / run commands must EXECUTE build tasks, not
   // stop after reading inputs and replying with a summary (classic failure:
@@ -779,6 +782,7 @@ async function runAgentLoop(
         } else if (r.kind === "mcp") {
           // Writes claim the file for this run; another run's claim blocks them.
           if (r.server === "filesystem") {
+            if (writeTargets(block.name, block.input).some(touchesLocalDb)) throw new Error(LOCAL_DB_BLOCKED);
             const blocked = await claimForWrite({ id: opts.lockOwnerId!, agentName: agent.name }, block.name, block.input);
             if (blocked) throw new Error(blocked);
           }
@@ -790,6 +794,13 @@ async function runAgentLoop(
           } else {
             resultStr = await boardReadText(opts.boardKey!);
           }
+        } else if (r.kind === "catalog") {
+          resultStr = await callCatalogTool(
+            { id: agent.id, name: agent.name },
+            block.name,
+            block.input,
+            (detail) => gateRiskyAction(mode, onEvent, block.id, "learning", detail)
+          );
         } else if (r.kind === "learning") {
           // Changes to data the agent did not create (user's knowledge/skills,
           // shared memory) go through the same approval gate as other risky actions.
@@ -828,6 +839,7 @@ async function runAgentLoop(
           resultStr = denied ?? (await callEnvTool(block.name, block.input, agentId, opts.workingDir));
         } else if (r.kind === "shell") {
           const cmd = String((block.input as any).command ?? "");
+          if (touchesLocalDb(cmd)) throw new Error(LOCAL_DB_BLOCKED);
           const denied = await gateRiskyAction(mode, onEvent, block.id, "shell", cmd);
           resultStr = denied ?? (await runShell(cmd, agentId, opts.workingDir));
         } else if (r.kind === "ask") {

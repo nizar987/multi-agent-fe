@@ -1,4 +1,5 @@
 "use client";
+import Icon from "@/components/Icon";
 
 export type RunMode = "approval" | "act" | "plan";
 
@@ -26,12 +27,12 @@ export default function ModeSelect({ value, onChange, showProceed, onProceed }: 
         onChange={(e) => onChange(e.target.value as RunMode)}
         title={HINTS[value]}
       >
-        <option value="approval">🛡 Approval</option>
-        <option value="act">⚡ Act</option>
-        <option value="plan">📝 Plan</option>
+        <option value="approval">Approval</option>
+        <option value="act">Act</option>
+        <option value="plan">Plan</option>
       </select>
       {value === "act" ? (
-        <span className="mode-warning" title={HINTS.act}>⚠ {HINTS.act}</span>
+        <span className="mode-warning" title={HINTS.act}><Icon name="alert" size={12} /> {HINTS.act}</span>
       ) : (
         <span title={HINTS[value]}>{HINTS[value]}</span>
       )}
@@ -41,7 +42,7 @@ export default function ModeSelect({ value, onChange, showProceed, onProceed }: 
           onClick={onProceed}
           title="Execute the drafted plan (switches to Approval mode)"
         >
-          ▶ Run plan
+          <Icon name="play" size={12} /> Run plan
         </button>
       )}
     </>

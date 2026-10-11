@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import Icon from "@/components/Icon";
+import PageHeader from "@/components/PageHeader";
 
 export default function MemoryPage() {
   const [memories, setMemories] = useState<any[]>([]);
@@ -36,58 +38,86 @@ export default function MemoryPage() {
   };
 
   return (
-    <div style={{ maxWidth: 720 }}>
-      <h1>Shared Memory</h1>
-      <p className="muted small mb-4">
-        Values written by one agent can be read by the others. Every access is recorded in the audit log.
-      </p>
+    <div className="page-narrow">
+      <PageHeader
+        title="Shared Memory"
+        subtitle="Values written by one agent can be read by the others. Every access is recorded in the audit log."
+      />
       {loadError && (
-        <div className="banner-danger" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div className="banner-danger row" style={{ gap: 12 }}>
           <span style={{ flex: 1 }}>Failed to load: {loadError}</span>
-          <button className="btn" onClick={load}>Retry</button>
+          <button className="btn btn-sm" onClick={load}><Icon name="refresh" size={14} /> Retry</button>
         </div>
       )}
-      <div className="row mb-4">
-        <button className={`btn${tab === "data" ? " btn-primary" : ""}`} onClick={() => setTab("data")}>Data</button>
-        <button className={`btn${tab === "audit" ? " btn-primary" : ""}`} onClick={() => setTab("audit")}>Audit log</button>
+      <div className="segmented mb-4" role="tablist" aria-label="Memory view">
+        <button role="tab" aria-selected={tab === "data"} className={`segmented-item${tab === "data" ? " active" : ""}`} onClick={() => setTab("data")}>
+          Data{memories.length > 0 && <span className="segmented-count">{memories.length}</span>}
+        </button>
+        <button role="tab" aria-selected={tab === "audit"} className={`segmented-item${tab === "audit" ? " active" : ""}`} onClick={() => setTab("audit")}>
+          Audit log
+        </button>
       </div>
 
       {tab === "data" && (
         <>
           {memories.length === 0 && (
-            <div className="empty-state"><div className="glyph">▤</div>Shared memory is still empty.</div>
-          )}
-          {memories.map((m) => (
-            <div key={m.key} className="list-row">
-              <div className="grow">
-                <div className="mono small">
-                  <strong>{m.key}</strong>
-                  {String(m.key).startsWith("agent:") && <> <span className="tag" title="Private note an agent saved for itself">🧠 self-learned</span></>}
-                </div>
-                <div className="muted small" style={{ wordBreak: "break-word" }}>{m.value}</div>
-                <div className="muted small">updated {m.updated_at}</div>
-              </div>
-              <button className="btn btn-danger-ghost" onClick={() => del(m.key)}>Delete</button>
+            <div className="empty-state">
+              <span className="glyph"><Icon name="memory" size={22} /></span>
+              <span className="empty-state-title">Shared memory is empty</span>
+              <span>Agents write here when they share values with each other.</span>
             </div>
-          ))}
+          )}
+          {memories.length > 0 && (
+            <div className="item-list">
+              {memories.map((m) => (
+                <div key={m.key} className="item-row">
+                  <span className="item-row-icon"><Icon name="key" size={15} /></span>
+                  <div className="item-row-main">
+                    <div className="item-row-title">
+                      <strong className="mono">{m.key}</strong>
+                      {String(m.key).startsWith("agent:") && (
+                        <span className="tag tag-accent" title="Private note an agent saved for itself"><Icon name="brain" size={11} /> self-learned</span>
+                      )}
+                    </div>
+                    <div className="item-row-sub item-row-sub--wrap">{m.value}</div>
+                    <div className="item-row-meta">updated {m.updated_at}</div>
+                  </div>
+                  <div className="item-row-actions">
+                    <button className="btn btn-danger-ghost btn-icon btn-sm" title="Delete" aria-label={`Delete ${m.key}`} onClick={() => del(m.key)}>
+                      <Icon name="trash" size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
 
       {tab === "audit" && (
         <>
           {audit.length === 0 && (
-            <div className="empty-state"><div className="glyph">▤</div>No memory activity yet.</div>
-          )}
-          {audit.map((a) => (
-            <div key={a.id} className="list-row">
-              <span className={`tag`}>{a.action}</span>
-              <div className="grow">
-                <span className="mono small">{a.key}</span>
-                {a.value_preview && <span className="muted small"> — {a.value_preview}</span>}
-                <div className="muted small">{a.agent_name ?? "?"} · {a.created_at}</div>
-              </div>
+            <div className="empty-state">
+              <span className="glyph"><Icon name="history" size={22} /></span>
+              <span className="empty-state-title">No memory activity yet</span>
             </div>
-          ))}
+          )}
+          {audit.length > 0 && (
+            <div className="item-list">
+              {audit.map((a) => (
+                <div key={a.id} className="item-row">
+                  <span className="tag" style={{ minWidth: 52, justifyContent: "center" }}>{a.action}</span>
+                  <div className="item-row-main">
+                    <div className="item-row-title">
+                      <span className="mono small">{a.key}</span>
+                      {a.value_preview && <span className="muted small">— {a.value_preview}</span>}
+                    </div>
+                    <div className="item-row-meta">{a.agent_name ?? "?"} · {a.created_at}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>

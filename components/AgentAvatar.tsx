@@ -26,7 +26,7 @@ export default function AgentAvatar({
         height: size,
         fontSize: size * 0.55,
         background: (color || "#c15f3c") + "26", // ~15% alpha
-        borderColor: color || "#c15f3c",
+        borderColor: (color || "#c15f3c") + "59", // ~35% alpha
       }}
       aria-label={ariaLabel}
     >

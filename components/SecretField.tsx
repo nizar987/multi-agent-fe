@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import Icon from "@/components/Icon";
 
 /**
  * Secret field pattern (DESIGN 2.1): always masked (last 4 chars),
@@ -91,7 +92,7 @@ export default function SecretField({
             onMouseUp={hideRevealed}
             onMouseLeave={hideRevealed}
             aria-label={`Show ${label}`}
-          >👁</button>
+          ><Icon name="eye" size={15} /></button>
           <button className="btn" onClick={() => setEditing(true)}>Replace</button>
           <button className="btn btn-danger-ghost" onClick={remove}>Delete</button>
         </div>
@@ -111,7 +112,7 @@ export default function SecretField({
         </div>
       )}
       <div className={`secret-store-note${backend.secure ? "" : " warn"}`}>
-        {backend.secure ? "✓" : "⚠"} Stored {backend.secure ? "securely" : ""} in {backend.label}
+        <Icon name={backend.secure ? "lock" : "alert"} size={12} /> Stored {backend.secure ? "securely" : ""} in {backend.label}
       </div>
     </div>
   );

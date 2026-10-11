@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Icon from "@/components/Icon";
 
 type TicketPriority = "low" | "medium" | "high";
 type TicketStatus = "open" | "executing" | "done" | "failed";
@@ -165,16 +166,18 @@ export default function TasksPage() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", minHeight: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0 }}>Tasks</h1>
-        <span className="muted small">tickets → Execute → the Agent Manager distributes the work</span>
-        <span style={{ flex: 1 }} />
+    <div className="fill-page" style={{ gap: 14 }}>
+      <header className="page-header" style={{ marginBottom: 0 }}>
+        <div className="page-header-text">
+          <h1>Tasks</h1>
+          <p className="page-header-sub">Add tickets, then Execute — the Agent Manager distributes the work.</p>
+        </div>
+        <div className="page-header-actions">
         <a className="btn" href="/api/tickets/template" download title="Download the CSV template (title, description, priority)">
-          ⬇ Template
+          <Icon name="download" size={14} /> Template
         </a>
         <button className="btn" onClick={() => importRef.current?.click()} disabled={busy} title="Import tickets from a CSV file (use the template)">
-          ⬆ Import CSV
+          <Icon name="upload" size={14} /> Import CSV
         </button>
         <input
           ref={importRef}
@@ -183,7 +186,7 @@ export default function TasksPage() {
           style={{ display: "none" }}
           onChange={(e) => { const f = e.target.files?.[0]; if (f) void importCsv(f); }}
         />
-        <button className="btn" onClick={() => setFormOpen((v) => !v)}>{formOpen ? "× Close" : "+ New ticket"}</button>
+        <button className="btn" onClick={() => setFormOpen((v) => !v)}>{formOpen ? <><Icon name="x" size={14} /> Close</> : <><Icon name="plus" size={14} strokeWidth={2.2} /> New ticket</>}</button>
         <button
           className="btn btn-primary"
           onClick={execute}
@@ -196,19 +199,20 @@ export default function TasksPage() {
                 : `Execute all ${toExecute.length} open ticket(s) via the Agent Manager`
           }
         >
-          ▶ Execute{toExecute.length > 0 ? ` (${toExecute.length})` : ""}
+          <Icon name="play" size={13} /> Execute{toExecute.length > 0 ? ` (${toExecute.length})` : ""}
         </button>
-      </div>
+        </div>
+      </header>
 
       {note && (
-        <div className="card" style={{ color: note.kind === "error" ? "var(--danger, #e5534b)" : "var(--success, #4caf7d)", padding: 10 }}>
+        <div className={note.kind === "error" ? "banner-danger" : "banner-success"} style={{ marginBottom: 0 }}>
           {note.text}
         </div>
       )}
 
       {/* New ticket form (collapsible) */}
       {formOpen && (
-        <div className="card">
+        <div className="card editor-card">
           <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "flex-start" }}>
             <div className="field" style={{ margin: 0, flex: "2 1 260px" }}>
               <label>Title</label>
@@ -259,7 +263,7 @@ export default function TasksPage() {
       {!loaded ? (
         <div className="skeleton" style={{ height: 200 }} />
       ) : (
-        <div style={{ display: "flex", gap: 12, alignItems: "stretch", flex: 1, minHeight: 0, overflowX: "auto", paddingBottom: 8 }}>
+        <div className="board">
           {COLUMNS.map((col) => {
             const items = tickets.filter((t) => t.status === col.status);
             const isTarget = dragOver === col.status;
@@ -269,42 +273,26 @@ export default function TasksPage() {
                 onDragOver={(e) => { if (col.droppable) { e.preventDefault(); setDragOver(col.status); } }}
                 onDragLeave={() => setDragOver((cur) => (cur === col.status ? null : cur))}
                 onDrop={col.droppable ? onDrop(col.status) : undefined}
-                style={{
-                  flex: "1 1 0",
-                  minWidth: 220,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                  background: "var(--bg-muted)",
-                  border: `1px ${isTarget ? "dashed var(--accent)" : "solid var(--border)"}`,
-                  borderRadius: "var(--radius, 8px)",
-                  padding: 10,
-                  minHeight: 260,
-                }}
+                className={`board-col${isTarget ? " board-col--target" : ""}`}
               >
-                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <div className="board-col-head" title={col.hint}>
+                  <span className={`board-col-dot board-col-dot--${col.status}`} />
                   <strong>{col.label}</strong>
-                  <span className="tag">{items.length}</span>
-                  <span className="muted" style={{ fontSize: 10 }}>{col.hint}</span>
+                  <span className="board-col-count">{items.length}</span>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, overflowY: "auto" }}>
+                <div className="board-col-body">
                   {items.length === 0 && (
-                    <div className="muted small" style={{ padding: "14px 4px", textAlign: "center" }}>
+                    <div className="board-col-empty">
                       {col.status === "open" ? "No open tickets — add or import some." : "—"}
                     </div>
                   )}
                   {items.map((t) => (
                     <div
                       key={t.id}
-                      className="card"
+                      className={`ticket-card ticket-card--${t.status}`}
                       draggable={t.status !== "executing"}
                       onDragStart={(e) => e.dataTransfer.setData("text/ticket-id", String(t.id))}
-                      style={{
-                        padding: 10,
-                        cursor: t.status === "executing" ? "default" : "grab",
-                        opacity: t.status === "done" ? 0.75 : 1,
-                        borderLeft: `3px solid ${PRIORITY_COLOR[t.priority]}`,
-                      }}
+                      style={{ ["--priority" as string]: PRIORITY_COLOR[t.priority] }}
                       title={t.status === "executing" ? "Being executed by the manager" : "Drag between Open and Done"}
                     >
                       <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -318,7 +306,7 @@ export default function TasksPage() {
                           />
                         )}
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: 13 }}>
+                          <div className="ticket-card-title">
                             <span className="muted">#{t.id}</span> {t.title}
                             {t.status === "executing" && <span className="dot dot-blue pulse-dot" style={{ width: 6, height: 6, display: "inline-block", marginLeft: 6 }} />}
                           </div>
@@ -328,22 +316,21 @@ export default function TasksPage() {
                             </div>
                           )}
                           <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
-                            <span className="tag" style={{ color: PRIORITY_COLOR[t.priority] }}>{t.priority}</span>
+                            <span className="tag ticket-priority"><span className="ticket-priority-dot" />{t.priority}</span>
                             {t.manager_task_id != null && (
                               <button
-                                className="btn btn-icon"
+                                className="btn btn-ghost btn-icon btn-sm"
                                 onClick={() => router.push(`/workspace?managerTask=${t.manager_task_id}`)}
                                 title={`Open manager task #${t.manager_task_id} in the Workspace${t.task_status ? ` (${t.task_status})` : ""}`}
-                                style={{ fontSize: 11 }}
-                              >🧩</button>
+                              ><Icon name="workspace" size={13} /></button>
                             )}
                             {t.status === "failed" && (
-                              <button className="btn" style={{ fontSize: 11, padding: "2px 8px" }} onClick={() => setStatus(t.id, "open")} title="Move back to Open to retry">
-                                ↺ Retry
+                              <button className="btn btn-sm" onClick={() => setStatus(t.id, "open")} title="Move back to Open to retry">
+                                <Icon name="refresh" size={12} /> Retry
                               </button>
                             )}
                             <span style={{ flex: 1 }} />
-                            <button className="btn btn-icon" onClick={() => removeTicket(t.id)} title="Delete ticket" style={{ fontSize: 11 }}>🗑</button>
+                            <button className="btn btn-danger-ghost btn-icon btn-sm ticket-delete" onClick={() => removeTicket(t.id)} title="Delete ticket" aria-label="Delete ticket"><Icon name="trash" size={13} /></button>
                           </div>
                         </div>
                       </div>
