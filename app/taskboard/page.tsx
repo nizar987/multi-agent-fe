@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
+import Icon from "@/components/Icon";
 
 interface TaskItem {
   id: number;
@@ -282,9 +283,9 @@ export default function TasksPage() {
                   {task.title}
                 </div>
                 <div style={{ fontSize: 12, color: "#666", display: "flex", gap: 10, marginTop: 2 }}>
-                  <span style={{ color: "#2563eb" }}>📁 {task.project}</span>
-                  <span style={{ color: priorityColor[task.priority] }}>⬤ {task.priority}</span>
-                  {task.due_date && <span>📅 {task.due_date}</span>}
+                  <span style={{ color: "var(--info)", display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="folder" size={12} /> {task.project}</span>
+                  <span style={{ color: priorityColor[task.priority] }}>● {task.priority}</span>
+                  {task.due_date && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="calendar" size={12} /> {task.due_date}</span>}
                 </div>
               </div>
 
@@ -295,10 +296,11 @@ export default function TasksPage() {
                   background: "transparent",
                   color: "#dc2626",
                   cursor: "pointer",
-                  fontSize: 16,
+                  display: "inline-flex",
                 }}
+                aria-label="Delete task"
               >
-                🗑
+                <Icon name="trash" size={15} />
               </button>
             </div>
           ))}

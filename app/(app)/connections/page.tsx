@@ -5,8 +5,18 @@ import TestConnection from "@/components/TestConnection";
 import ConnectionsManager from "@/components/ConnectionsManager";
 import ModelSelect from "@/components/ModelSelect";
 import NvidiaNimSection from "@/components/NvidiaNimSection";
+import PageHeader from "@/components/PageHeader";
+import SettingsNav from "@/components/SettingsNav";
 
 const MODEL_PRESETS = ["claude-sonnet-5", "claude-opus-4.8", "claude-haiku-4.5"];
+
+const CONNECTION_SECTIONS = [
+  { id: "nvidia-nim", label: "NVIDIA NIM" },
+  { id: "connections", label: "All connections" },
+  { id: "ai", label: "Active AI provider" },
+  { id: "vision", label: "Vision tool" },
+  { id: "tavily", label: "Web search" },
+];
 
 export default function ConnectionsPage() {
   const [data, setData] = useState<any>(null);
@@ -36,18 +46,31 @@ export default function ConnectionsPage() {
     window.dispatchEvent(new Event("settings-changed"));
   };
 
-  if (!data) return <div className="skeleton" style={{ width: 300, height: 20 }} />;
+  if (!data) {
+    return (
+      <div className="page-narrow">
+        <PageHeader title="Connections" />
+        <div className="skeleton" style={{ height: 120, borderRadius: 14 }} />
+      </div>
+    );
+  }
 
   return (
-    <div>
-      <h1>Connections</h1>
+    <div className="settings-layout">
+      <SettingsNav sections={CONNECTION_SECTIONS} />
+      <div className="settings-main">
+      <PageHeader
+        title="Connections"
+        subtitle="AI providers, code hosts, databases and other services your agents can use."
+      />
 
       {/* ============ NVIDIA NIM (separate section) ============ */}
       <NvidiaNimSection onChanged={load} />
 
       {/* ============ Connections (multiple per type) ============ */}
       <section className="settings-section" id="connections">
-        <div className="hint mb-2">
+        <h2>All connections</h2>
+        <div className="hint mb-4">
           Add as many AI providers, GitHub, GitLab, database and Redis connections as you like —
           pick which one is <strong>active</strong> for each type. Agents always use the active connection.
           NVIDIA NIM is managed separately above.
@@ -177,6 +200,7 @@ export default function ConnectionsPage() {
           placeholder="tvly-…"
         />
       </section>
+      </div>
     </div>
   );
 }

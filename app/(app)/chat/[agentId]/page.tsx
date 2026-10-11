@@ -14,6 +14,7 @@ import ModelSelect from "@/components/ModelSelect";
 import MessageBody, { ThinkingIndicator, ToolProgress } from "@/components/MessageBody";
 import ProgressPanel, { Todo } from "@/components/ProgressPanel";
 import { PickedAttachment, toWire, parseStoredMessage } from "@/components/attachments-client";
+import Icon from "@/components/Icon";
 
 type MsgAttachment = { name: string; kind: string; previewUrl?: string };
 
@@ -338,7 +339,7 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
         <div className="card" style={{ maxWidth: 400, textAlign: "center", padding: 32 }}>
-          <div style={{ fontSize: 28, marginBottom: 12 }}>◆</div>
+          <span className="glyph-tile"><Icon name="key" size={22} /></span>
           <h2>Connect an AI model first</h2>
           <p className="muted">Agents need an AI API key to answer. Configuration only takes a minute.</p>
           <Link href="/connections" className="btn btn-primary">Open Connections → AI Provider</Link>
@@ -352,7 +353,7 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
       <div className="chat-col">
         <div className="chat-header">
           <div className="chat-header-row">
-            <Link href="/" className="chat-back muted" title="Back">←</Link>
+            <Link href="/" className="btn btn-ghost btn-icon btn-sm chat-back" title="Back to agents" aria-label="Back to agents"><Icon name="chevron-left" size={16} /></Link>
             <AgentAvatar avatar={agent?.avatar} color={agent?.color} size={28} working={busy} name={agent?.name} />
             <div className="chat-header-title">
               <strong>{agent?.name ?? "…"}</strong>
@@ -363,7 +364,7 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
                   aria-expanded={descOpen}
                   title={descOpen ? "Hide description" : "Show description"}
                 >
-                  About<span className={`chevron${descOpen ? " open" : ""}`}>⌄</span>
+                  About<Icon name="chevron-down" size={12} className={`chevron${descOpen ? " open" : ""}`} />
                 </button>
               )}
             </div>
@@ -371,20 +372,21 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
             <select className="input chat-conv-select" value={convId ?? ""} onChange={(e) => selectConv(Number(e.target.value))}>
               {convs.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
             </select>
-            <button className="btn" onClick={newConv} title="New conversation (Cmd/Ctrl+N)">+ New</button>
+            <button className="btn btn-sm" onClick={newConv} title="New conversation (Cmd/Ctrl+N)"><Icon name="plus" size={14} strokeWidth={2.2} /> New</button>
             <button
-              className="btn btn-danger-ghost"
+              className="btn btn-danger-ghost btn-icon"
               onClick={deleteConv}
               disabled={busy || !convId}
               title="Delete this conversation"
               aria-label="Delete conversation"
-            >🗑</button>
+            ><Icon name="trash" size={15} /></button>
             <button
               className={`btn btn-icon${progressOpen && todos.length > 0 ? " active" : ""}`}
               onClick={() => setProgressOpen((v) => !v)}
               title={todos.length > 0 ? `Progress: ${todos.filter((t) => t.status === "done").length}/${todos.length} done` : "No checklist yet"}
               disabled={todos.length === 0}
-            >☑</button>
+              aria-label="Toggle progress checklist"
+            ><Icon name="check-square" size={15} /></button>
             <button
               className={`btn btn-icon${previewTarget ? " active" : ""}`}
               onClick={() => setPreviewTarget((v) => v ? null : v)}
@@ -400,8 +402,9 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
         <div className="chat-scroll" ref={scrollRef}>
           {items.length === 0 && !busy && (
             <div className="empty-state">
-              <div className="glyph">💬</div>
-              Start a conversation with {agent?.name ?? "the agent"}.
+              <span className="glyph"><Icon name="chat" size={22} /></span>
+              <span className="empty-state-title">Start a conversation</span>
+              <span>Ask {agent?.name ?? "the agent"} anything — it can use its tools and skills.</span>
             </div>
           )}
           {items.map((it, i) => {
@@ -421,7 +424,7 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
                     <div className="msg-attachments">
                       {it.atts.map((a, k) => a.previewUrl
                         ? <img key={k} src={a.previewUrl} alt={a.name} title={a.name} />
-                        : <span key={k} className="attach-chip"><span>{a.kind === "document" ? "📄" : "📝"}</span><span className="attach-name">{a.name}</span></span>)}
+                        : <span key={k} className="attach-chip"><Icon name={a.kind === "document" ? "file" : "file-text"} size={13} /><span className="attach-name">{a.name}</span></span>)}
                     </div>
                   )}
                 </div>
@@ -485,10 +488,10 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
           </div>
           <div className="chat-input-actions">
             <div className="chat-input-action-left">
-              <button className="btn btn-sm btn-connector" onClick={() => setConnectorOpen(true)} title="Add or switch connections">🔗 Connector</button>
+              <button className="btn btn-sm btn-connector" onClick={() => setConnectorOpen(true)} title="Add or switch connections"><Icon name="link" size={13} /> Connector</button>
               {/* Working directory widget */}
               <div className="workdir-widget">
-                <span className="workdir-icon">📁</span>
+                <Icon name="folder" size={13} className="workdir-icon" />
                 {workingDir ? (
                   <>
                     <span className="workdir-path" title={workingDir}>{workingDir.split("/").pop() || workingDir}</span>
@@ -504,7 +507,7 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
                       disabled={busy}
                       title="Remove working directory"
                       aria-label="Remove working directory"
-                    >✕</button>
+                    ><Icon name="x" size={11} /></button>
                   </>
                 ) : (
                   <button
@@ -517,7 +520,7 @@ export default function ChatPage({ params }: { params: { agentId: string } }) {
               </div>
             </div>
             <div className="chat-input-action-right">
-              <button className="btn btn-sm btn-ghost-danger" onClick={clearChat} disabled={items.length === 0} title="Clear conversation messages">🧹 Clear</button>
+              <button className="btn btn-sm btn-ghost-danger" onClick={clearChat} disabled={items.length === 0} title="Clear conversation messages"><Icon name="eraser" size={13} /> Clear</button>
             </div>
           </div>
         </div>

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { type PreviewTarget } from "@/lib/preview-detect";
+import Icon from "@/components/Icon";
 
 interface PreviewPanelProps {
   /** Controlled: the target to show. null = panel is hidden. */
@@ -60,21 +61,21 @@ export default function PreviewPanel({ target, width = 380, onClose }: PreviewPa
     <div className="preview-panel" style={{ width }}>
       {/* header */}
       <div className="preview-panel-header">
-        <span className="preview-panel-icon">{target.kind === "web" ? "🌐" : "📄"}</span>
+        <Icon name={target.kind === "web" ? "globe" : "file"} size={14} className="preview-panel-icon" />
         <span className="preview-panel-title" title={label}>{displayLabel}</span>
         {activePath && activePath !== (target.kind === "file" ? target.path : null) && (
           <button
             className="preview-back-btn"
             onClick={() => setActivePath(null)}
             title="Back"
-          >← Back</button>
+          ><Icon name="chevron-left" size={13} /> Back</button>
         )}
         <button
           className="preview-close-btn"
           onClick={onClose}
           title="Close preview"
           aria-label="Close preview"
-        >✕</button>
+        ><Icon name="x" size={14} /></button>
       </div>
 
       {/* content */}
@@ -121,7 +122,7 @@ export default function PreviewPanel({ target, width = 380, onClose }: PreviewPa
                         setActivePath(newPath);
                       }}
                     >
-                      <span>{e.isDir ? "📁" : "📄"}</span>
+                      <Icon name={e.isDir ? "folder" : "file"} size={14} className="workdir-icon" />
                       <span className="grow">{e.name}</span>
                       {!e.isDir && <span className="muted small">{(e.size / 1024).toFixed(1)}KB</span>}
                     </div>

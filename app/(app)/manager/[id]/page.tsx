@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { statusBadge, assignmentBadge, eventLabel } from "../status";
+import Icon from "@/components/Icon";
 
 interface Assignment {
   id: number;
@@ -288,7 +289,7 @@ export default function ManagerTaskPage() {
                       {hasPlan && (
                         <div>
                           <div className="small" style={{ fontWeight: 600, marginBottom: 6, color: "var(--text-secondary)" }}>
-                            🗒 Plan
+                            <Icon name="list" size={13} /> Plan
                           </div>
                           <pre style={{
                             whiteSpace: "pre-wrap",
@@ -315,7 +316,7 @@ export default function ManagerTaskPage() {
                           alignItems: "center",
                           gap: 6,
                         }}>
-                          📄 Result
+                          <Icon name="file-text" size={13} /> Result
                           {isWorking && (
                             <span className="muted small" style={{ fontWeight: 400 }}>(updating…)</span>
                           )}
@@ -356,7 +357,7 @@ export default function ManagerTaskPage() {
       {task.report && (
         <div style={{ marginTop: 28 }}>
           <h3 style={{ margin: "0 0 8px" }}>
-            {task.status === "failed" ? "❌ Report" : "✅ Report"}
+            <span className="row" style={{ gap: 6 }}><Icon name={task.status === "failed" ? "alert" : "check"} size={15} /> Report</span>
           </h3>
           <div style={{
             background: "var(--bg-muted)",

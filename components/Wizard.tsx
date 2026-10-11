@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Icon from "@/components/Icon";
 
 /**
  * 4-step onboarding wizard (DESIGN §3):
@@ -172,9 +173,9 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
             <h2>Local folders <span className="tag tag-optional">optional</span></h2>
             <p className="muted small">Pick the folders agents may access with the Filesystem tool.</p>
             {folders.map((f) => (
-              <div key={f} className="list-row"><span>📁</span><div className="grow path-truncate">{f}</div></div>
+              <div key={f} className="list-row"><Icon name="folder" size={15} className="workdir-icon" /><div className="grow path-truncate">{f}</div></div>
             ))}
-            <button className="btn mb-4" onClick={pickFolder}>+ Add folder</button>
+            <button className="btn mb-4" onClick={pickFolder}><Icon name="plus" size={14} strokeWidth={2.2} /> Add folder</button>
             <div className="wizard-actions">
               <button className="btn" onClick={finishStep3}>Skip</button>
               <button className="btn btn-primary" onClick={finishStep3}>Next →</button>
@@ -184,7 +185,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
 
         {step === 4 && (
           <div className="wizard-step" key={4}>
-            <h2>All set 🎉</h2>
+            <h2>All set</h2>
             <p className="muted small">3 example agents were created for you — click one to start chatting right away.</p>
             <div className="card-grid mb-4">
               {seedAgents.map((a) => (

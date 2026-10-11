@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { AI_PROVIDER_PRESETS, getProviderPreset } from "@/lib/ai-provider-presets";
+import Icon, { type IconName } from "@/components/Icon";
 
 /* ---------------- kind metadata ---------------- */
 
@@ -17,7 +18,7 @@ interface Field {
 interface KindMeta {
   kind: ConnKind;
   title: string;
-  icon: string;
+  icon: IconName;
   secretLabel: string;
   secretPlaceholder: string;
   secretRequired: boolean;
@@ -30,7 +31,7 @@ const KINDS: KindMeta[] = [
   {
     kind: "ai",
     title: "AI Provider",
-    icon: "🤖",
+    icon: "agents",
     secretLabel: "API Key",
     secretPlaceholder: "sk-ant-… / sk-… / AIza…",
     secretRequired: true,
@@ -44,7 +45,7 @@ const KINDS: KindMeta[] = [
   {
     kind: "github",
     title: "GitHub",
-    icon: "🐙",
+    icon: "github",
     secretLabel: "Personal Access Token",
     secretPlaceholder: "ghp_… / github_pat_…",
     secretRequired: true,
@@ -54,7 +55,7 @@ const KINDS: KindMeta[] = [
   {
     kind: "gitlab",
     title: "GitLab",
-    icon: "🦊",
+    icon: "gitlab",
     secretLabel: "Personal Access Token",
     secretPlaceholder: "glpat-…",
     secretRequired: true,
@@ -64,7 +65,7 @@ const KINDS: KindMeta[] = [
   {
     kind: "database",
     title: "Database",
-    icon: "💾",
+    icon: "database",
     secretLabel: "Password",
     secretPlaceholder: "database password",
     secretRequired: false,
@@ -81,7 +82,7 @@ const KINDS: KindMeta[] = [
   {
     kind: "redis",
     title: "Redis",
-    icon: "🧱",
+    icon: "layers",
     secretLabel: "Password (optional)",
     secretPlaceholder: "leave empty if no auth",
     secretRequired: false,
@@ -97,7 +98,7 @@ const KINDS: KindMeta[] = [
   {
     kind: "grafana",
     title: "Grafana",
-    icon: "📊",
+    icon: "usage",
     secretLabel: "Service account token",
     secretPlaceholder: "glsa_…",
     secretRequired: true,
@@ -110,7 +111,7 @@ const KINDS: KindMeta[] = [
   {
     kind: "prometheus",
     title: "Prometheus",
-    icon: "🔥",
+    icon: "flame",
     secretLabel: "Password / bearer token (optional)",
     secretPlaceholder: "leave empty if no auth",
     secretRequired: false,
@@ -123,7 +124,7 @@ const KINDS: KindMeta[] = [
   {
     kind: "loki",
     title: "Loki",
-    icon: "🪵",
+    icon: "logs",
     secretLabel: "Password / bearer token (optional)",
     secretPlaceholder: "leave empty if no auth",
     secretRequired: false,
@@ -204,7 +205,7 @@ export default function ConnectionsManager({ kinds, filter, onChanged }: Connect
         return (
           <div key={meta.kind} className="conn-group">
             <div className="conn-group-title">
-              <span>{meta.icon} {meta.title}</span>
+              <span className="row" style={{ gap: 8 }}><span className="item-row-icon" style={{ width: 26, height: 26, borderRadius: 7 }}><Icon name={meta.icon} size={14} /></span>{meta.title}</span>
               <span className="tag">{rows.length} connection{rows.length !== 1 ? "s" : ""}</span>
             </div>
 
@@ -397,7 +398,7 @@ function ConnForm({ meta, existing, onDone, onCancel }: {
             onClick={() => importRef.current?.click()}
             title='Isi form dari file settings.json (format Claude Code / 9router: { "env": { "ANTHROPIC_BASE_URL": …, "ANTHROPIC_AUTH_TOKEN": …, "ANTHROPIC_DEFAULT_MODEL": … } })'
           >
-            📥 Import settings.json
+            <Icon name="upload" size={13} /> Import settings.json
           </button>
           <input
             ref={importRef}

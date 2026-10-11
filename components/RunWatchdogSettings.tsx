@@ -23,7 +23,7 @@ const STATUS_LABEL: Record<string, string> = {
   incomplete: "◐ incomplete",
   failed: "⚠ failed (will retry)",
   error: "✕ error",
-  interrupted: "⏸ interrupted",
+  interrupted: "‖ interrupted",
   resumed: "↻ resumed",
   superseded: "– superseded",
 };
@@ -83,9 +83,13 @@ export default function RunWatchdogSettings() {
       {info && (
         <>
           <div className="row mb-2">
-            <button className={`btn${info.enabled ? " btn-primary" : ""}`} disabled={busy} onClick={() => toggle(true)}>On</button>
-            <button className={`btn${!info.enabled ? " btn-primary" : ""}`} disabled={busy} onClick={() => toggle(false)}>Off</button>
-            <button className="btn" disabled={busy} onClick={load}>Refresh</button>
+            <label className="switch">
+              <input type="checkbox" checked={info.enabled} disabled={busy} onChange={(e) => toggle(e.target.checked)} />
+              <span className="switch-track" aria-hidden />
+              {info.enabled ? "On" : "Off"}
+            </label>
+            <span style={{ flex: 1 }} />
+            <button className="btn btn-sm" disabled={busy} onClick={load}>Refresh</button>
           </div>
           {info.runs.length > 0 && (
             <div className="table-wrap">

@@ -1,5 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
+import Icon from "@/components/Icon";
+import PageHeader from "@/components/PageHeader";
 
 interface Totals { calls: number; input: number; output: number; total: number; cacheRead: number; cacheWrite: number }
 interface ByModel extends Totals { provider: string; model: string }
@@ -26,19 +28,19 @@ function PctBadge({ pct, label }: { pct: number | null; label: string }) {
   if (pct === null) return <span className="muted small">{label}: —</span>;
   const up = pct >= 0;
   return (
-    <span className="small" style={{ color: up ? "var(--danger, #e5534b)" : "var(--success, #4caf7d)" }} title={label}>
-      {up ? "▲" : "▼"} {fmtPct(pct)} {label}
+    <span className={`pct-badge ${up ? "pct-badge--up" : "pct-badge--down"}`} title={label}>
+      {up ? "▲" : "▼"} {fmtPct(pct)} <span className="muted">{label}</span>
     </span>
   );
 }
 
 function StatTile({ label, value, sub, extra }: { label: string; value: string; sub?: string; extra?: React.ReactNode }) {
   return (
-    <div className="card" style={{ flex: "1 1 160px", minWidth: 140 }}>
-      <div className="muted small" style={{ textTransform: "uppercase", letterSpacing: 0.4, fontSize: 11 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>{value}</div>
-      {sub && <div className="muted small" style={{ marginTop: 2 }}>{sub}</div>}
-      {extra && <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>{extra}</div>}
+    <div className="card stat-tile">
+      <div className="stat-tile-label">{label}</div>
+      <div className="stat-tile-value">{value}</div>
+      {sub && <div className="muted small">{sub}</div>}
+      {extra && <div className="stat-tile-extra">{extra}</div>}
     </div>
   );
 }
@@ -90,21 +92,29 @@ export default function UsagePage() {
     load();
   };
 
-  if (!data) return <div className="skeleton" style={{ height: 120 }} />;
+  if (!data) {
+    return (
+      <div>
+        <PageHeader title="Usage" subtitle="Token consumption across all AI calls." />
+        <div className="stat-grid">
+          {[0, 1, 2, 3].map((i) => <div key={i} className="card stat-tile"><div className="skeleton" style={{ width: "50%" }} /><div className="skeleton" style={{ height: 24, marginTop: 8 }} /></div>)}
+        </div>
+      </div>
+    );
+  }
 
   const maxDaily = Math.max(1, ...data.daily.map((d) => d.total));
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 900 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0 }}>Usage</h1>
-        <span className="muted small">token consumption across all AI calls</span>
-        <span style={{ flex: 1 }} />
-        <button className="btn btn-danger-ghost" onClick={resetUsage}>Reset</button>
-      </div>
+    <div className="stack" style={{ maxWidth: 1000 }}>
+      <PageHeader
+        title="Usage"
+        subtitle="Token consumption across all AI calls."
+        actions={<button className="btn btn-danger-ghost" onClick={resetUsage}><Icon name="refresh" size={14} /> Reset</button>}
+      />
 
       {/* Stat tiles */}
-      <div className="row" style={{ flexWrap: "wrap", gap: 10 }}>
+      <div className="stat-grid">
         <StatTile label="Total tokens" value={fmt(data.allTime.total)} sub={`${fmt(data.allTime.calls)} calls`} />
         <StatTile label="Input" value={fmt(data.allTime.input)} />
         <StatTile label="Output" value={fmt(data.allTime.output)} />
@@ -136,20 +146,16 @@ export default function UsagePage() {
       <div className="card">
         <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
           <div>
-            <strong>Context limit</strong>
-            <div className="muted small" style={{ marginTop: 2 }}>
+            <h3 className="card-title">Context limit</h3>
+            <div className="muted small">
               When on, the oldest messages are trimmed so each request stays under the token budget.
             </div>
           </div>
-          <button
-            className={`btn ${enabled ? "btn-primary" : ""}`}
-            onClick={toggleLimit}
-            disabled={savingLimit}
-            style={{ minWidth: 88 }}
-            title={enabled ? "Limit is ON — click to turn off" : "Limit is OFF — click to turn on"}
-          >
-            {enabled ? "● On" : "○ Off"}
-          </button>
+          <label className="switch" title={enabled ? "Limit is ON — click to turn off" : "Limit is OFF — click to turn on"}>
+            <input type="checkbox" checked={enabled} onChange={toggleLimit} disabled={savingLimit} />
+            <span className="switch-track" aria-hidden />
+            {enabled ? "On" : "Off"}
+          </label>
         </div>
         <div className="row" style={{ gap: 10, marginTop: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
           <div className="field" style={{ margin: 0 }}>
@@ -175,8 +181,8 @@ export default function UsagePage() {
       {/* Daily sparkbars */}
       {data.daily.length > 0 && (
         <div className="card">
-          <strong>Last {data.daily.length} day{data.daily.length > 1 ? "s" : ""}</strong>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 104, marginTop: 12 }}>
+          <h3 className="card-title">Last {data.daily.length} day{data.daily.length > 1 ? "s" : ""}</h3>
+          <div className="spark-bars">
             {[...data.daily].reverse().map((d, i, arr) => {
               const prev = i > 0 ? arr[i - 1].total : 0;
               const pct = prev > 0 ? ((d.total - prev) / prev) * 100 : null;
@@ -190,7 +196,7 @@ export default function UsagePage() {
                     {pct === null ? "·" : `${pct >= 0 ? "▲" : "▼"}${Math.abs(pct) >= 100 ? Math.round(Math.abs(pct)) : Math.abs(pct).toFixed(0)}%`}
                   </span>
                   <div style={{ width: "100%", display: "flex", flexDirection: "column-reverse", height: 64 }}>
-                    <div style={{ height: `${(d.total / maxDaily) * 100}%`, background: "var(--accent)", borderRadius: "3px 3px 0 0", minHeight: 2 }} />
+                    <div className="spark-bar" style={{ height: `${(d.total / maxDaily) * 100}%` }} />
                   </div>
                   <span className="muted" style={{ fontSize: 9 }}>{d.day.slice(5)}</span>
                 </div>
@@ -202,7 +208,7 @@ export default function UsagePage() {
 
       {/* By model */}
       <div className="card">
-        <strong>By model</strong>
+        <h3 className="card-title">By model</h3>
         {data.byModel.length === 0 ? (
           <div className="muted small" style={{ marginTop: 8 }}>No usage recorded yet.</div>
         ) : (
@@ -232,7 +238,7 @@ export default function UsagePage() {
       {/* Recent calls */}
       {data.recent.length > 0 && (
         <div className="card">
-          <strong>Recent calls</strong>
+          <h3 className="card-title">Recent calls</h3>
           <div className="table-wrap">
             <table className="usage-table">
               <thead>

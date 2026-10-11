@@ -11,6 +11,7 @@
  *  - Review notes when rejected / needs revision
  */
 import { useEffect, useRef, useState } from "react";
+import Icon from "@/components/Icon";
 
 interface AssignmentEvent {
   id: number;
@@ -45,14 +46,14 @@ const TERMINAL = new Set(["approved", "failed"]);
 const ACTIVE_ASSIGNMENT = new Set(["in_progress", "submitted", "needs_revision"]);
 
 const EVENT_LABEL: Record<string, string> = {
-  dispatched: "🚀 Dispatched",
-  submitted: "📨 Submitted",
-  completion_check_failed: "🔄 Not complete yet",
-  review_passed: "✅ Review passed",
-  review_failed: "❌ Review failed",
-  revision_requested: "🔁 Revision requested",
-  assignment_approved: "✅ Approved",
-  task_failed: "❌ Failed",
+  dispatched: "Dispatched",
+  submitted: "Submitted",
+  completion_check_failed: "Not complete yet",
+  review_passed: "Review passed",
+  review_failed: "Review failed",
+  revision_requested: "Revision requested",
+  assignment_approved: "Approved",
+  task_failed: "Failed",
 };
 
 function eventLabel(type: string): string {
@@ -117,7 +118,7 @@ export default function AssignmentDetail({ taskId, assignmentId, defaultOpen = f
         }}
         aria-expanded={open}
       >
-        <span className="assignment-detail-chevron">{open ? "▾" : "▸"}</span>
+        <Icon name="chevron-right" size={13} className={`assignment-detail-chevron${open ? " rot-90" : ""}`} />
         <span className="assignment-detail-label">
           {open ? "Hide detail" : "Show detail"}
         </span>
@@ -135,7 +136,7 @@ export default function AssignmentDetail({ taskId, assignmentId, defaultOpen = f
               {/* Plan */}
               {assignment.last_plan && (
                 <div className="assignment-section">
-                  <div className="assignment-section-title">📋 Plan (plan mode)</div>
+                  <div className="assignment-section-title"><Icon name="list" size={13} /> Plan (plan mode)</div>
                   <pre className="assignment-pre">{assignment.last_plan}</pre>
                 </div>
               )}
@@ -144,7 +145,7 @@ export default function AssignmentDetail({ taskId, assignmentId, defaultOpen = f
               {events.length > 0 && (
                 <div className="assignment-section">
                   <div className="assignment-section-title">
-                    🗂 Event log
+                    <Icon name="history" size={13} /> Event log
                     {isActive && (
                       <span className="muted small" style={{ marginLeft: 6 }}>
                         · live
@@ -185,7 +186,7 @@ export default function AssignmentDetail({ taskId, assignmentId, defaultOpen = f
               {assignment.last_result && (
                 <div className="assignment-section">
                   <div className="assignment-section-title">
-                    📄 Result (act mode)
+                    <Icon name="file-text" size={13} /> Result (act mode)
                     {assignment.attempt_count > 1 && (
                       <span className="muted small" style={{ marginLeft: 6 }}>
                         · attempt {assignment.attempt_count}
@@ -199,7 +200,7 @@ export default function AssignmentDetail({ taskId, assignmentId, defaultOpen = f
               {/* Review notes */}
               {assignment.last_review_notes && (
                 <div className="assignment-section">
-                  <div className="assignment-section-title">🔍 Review notes</div>
+                  <div className="assignment-section-title"><Icon name="search" size={13} /> Review notes</div>
                   <div className="review-note" style={{ marginTop: 4 }}>
                     {assignment.last_review_notes}
                   </div>

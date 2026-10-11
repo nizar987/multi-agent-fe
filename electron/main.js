@@ -9,7 +9,7 @@
  * Dev: run `npm run dev` separately, then `npm run electron:dev` —
  * the window points at http://localhost:3210.
  */
-const { app, BrowserWindow, dialog, safeStorage, Menu, shell } = require("electron");
+const { app, BrowserWindow, dialog, safeStorage, Menu, shell, ipcMain, nativeTheme } = require("electron");
 const path = require("path");
 const net = require("net");
 
@@ -134,22 +134,54 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+const THEMES = new Set(["system", "light", "dark"]);
+
+/** Window background painted before the page loads — matches the CSS tokens. */
+function windowBackground() {
+  return nativeTheme.shouldUseDarkColors ? "#111113" : "#ffffff";
+}
+
+function installThemeSync() {
+  ipcMain.on("theme:set", (_event, theme) => {
+    if (!THEMES.has(theme)) return;
+    nativeTheme.themeSource = theme;
+    if (mainWindow && process.platform !== "darwin") {
+      mainWindow.setBackgroundColor(windowBackground());
+    }
+  });
+}
+
 async function createWindow() {
   const isMac = process.platform === "darwin";
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
-    // macOS: frameless hiddenInset — traffic lights sit on the sidebar
-    ...(isMac ? { titleBarStyle: "hiddenInset" } : {}),
-    backgroundColor: "#1c1c1a",
+    width: 1280,
+    height: 820,
+    minWidth: 760,
+    minHeight: 560,
+    // macOS: frameless hiddenInset with native vibrancy behind the sidebar;
+    // the traffic lights sit in the sidebar's top padding.
+    ...(isMac
+      ? {
+          titleBarStyle: "hiddenInset",
+          trafficLightPosition: { x: 18, y: 16 },
+          vibrancy: "sidebar",
+          visualEffectState: "followWindow",
+          backgroundColor: "#00000000",
+        }
+      : { backgroundColor: windowBackground() }),
     webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      scrollBounce: true,
+      spellcheck: true,
     },
     show: false,
   });
+
+  // Show as soon as the first frame is painted (no white flash, no waiting
+  // for every subresource); loadURL below still resolves on full load.
+  mainWindow.once("ready-to-show", () => mainWindow?.show());
 
   let url;
   if (isDev) {
@@ -171,7 +203,7 @@ async function createWindow() {
     url = await startNextServer();
   }
   await mainWindow.loadURL(url);
-  mainWindow.show();
+  if (!mainWindow.isVisible()) mainWindow.show();
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -181,6 +213,7 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
   installBridge();
+  installThemeSync();
   buildMenu();
   await createWindow();
   app.on("activate", () => {
